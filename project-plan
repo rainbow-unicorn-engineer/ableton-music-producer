@@ -148,7 +148,7 @@ Your first original tool. → *Every plugin exposes its knobs to Ableton as a nu
 
 - [ ] Write `tools/param_dump.py`: given a track+device, iterate `device.parameters`, output JSON of `{index, name, min, max, current_value}`
 - [ ] Run it on Serum 2 → save output to `plugin-dictionary/serum2.params.json`
-- [ ] Repeat for each FabFilter, Soundtoys, KClip as you first use them
+- [ ] Repeat for each FabFilter, Soundtoys, KClip, Waves, Native Instruments as you first use them
 - [ ] Now "set Serum's filter cutoff to 40%" is a real, executable command
 
 ---
