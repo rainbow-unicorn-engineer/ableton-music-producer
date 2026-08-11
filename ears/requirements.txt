@@ -1,0 +1,10 @@
+# Ears dependencies (librosa + soundfile likely already installed for the
+# library analyst; matplotlib is the only truly new one)
+numpy>=1.24
+matplotlib>=3.7
+scipy>=1.10
+soundfile>=0.12
+librosa>=0.10
+# Optional: reference LUFS meter (the built-in one is validated, but this
+# is the community standard)
+# pyloudnorm

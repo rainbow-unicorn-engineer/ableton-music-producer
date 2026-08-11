@@ -73,6 +73,20 @@ def analyze_file(path: str) -> str:
 
 
 @mcp.tool()
+def analyze_bounce(path: str, out_dir: str = None) -> str:
+    """Phase 4 'ears': full mix feedback on a bounced audio file.
+    Measures integrated LUFS, true peak (dBTP), loudness range, and
+    per-band energy balance (sub/bass/low-mid/mid/high-mid/high), renders
+    a spectrogram PNG next to the file (or into out_dir), and returns it
+    all as JSON including a human-readable summary. Use on bounces from
+    the AudioCapture.amxd recorder or File > Export."""
+    ears_dir = Path(__file__).resolve().parents[1] / "ears"
+    sys.path.insert(0, str(ears_dir))
+    import analyze_bounce as ab
+    return json.dumps(ab.analyze(path, out_dir), indent=2)
+
+
+@mcp.tool()
 def library_stats() -> str:
     """Coverage report of the whole library: totals, analyzed count,
     loops vs one-shots, and breakdowns by category and by key — what you
