@@ -4,7 +4,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from MCP_Server.plugin_aliases import (
+from server.plugin_aliases import (
     resolve_alias,
     get_alias_for_param,
     get_categories,

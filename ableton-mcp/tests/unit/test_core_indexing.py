@@ -12,7 +12,7 @@ sys.modules['mcp.server.fastmcp'] = MagicMock()
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from MCP_Server.server import _to_zero_based, _optional_to_zero_based
+from server.server import _to_zero_based, _optional_to_zero_based
 
 
 # ── _to_zero_based ──────────────────────────────────────────────

@@ -13,7 +13,7 @@ sys.modules['mcp.server.fastmcp'] = _mock_fastmcp
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from MCP_Server.server import normalize_param, denormalize_param
+from server.server import normalize_param, denormalize_param
 
 
 class TestNormalizeParam:

@@ -11,7 +11,7 @@ sys.modules['mcp.server.fastmcp'] = MagicMock()
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from MCP_Server.server import bar_to_beat, beat_to_bar
+from server.server import bar_to_beat, beat_to_bar
 
 
 class TestBarToBeat:

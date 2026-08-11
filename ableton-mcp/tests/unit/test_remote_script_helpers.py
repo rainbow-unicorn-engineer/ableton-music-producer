@@ -22,7 +22,7 @@ sys.modules.setdefault("_Framework.ControlSurface", _cs_module)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from AbletonMCP_Remote_Script import AbletonMCP  # noqa: E402
+from remote_script.AbletonMCP import AbletonMCP  # noqa: E402
 
 
 class _NormalTrack:

@@ -19,7 +19,7 @@ sys.modules["_Framework.ControlSurface"] = _control_surface_module
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from AbletonMCP_Remote_Script import AbletonMCP  # noqa: E402
+from remote_script.AbletonMCP import AbletonMCP  # noqa: E402
 
 
 class _FakeItem:

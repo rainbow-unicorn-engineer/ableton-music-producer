@@ -13,13 +13,13 @@ sys.modules['mcp.server.fastmcp'] = _mock_fastmcp
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from MCP_Server.server import delete_track, get_track_deletion_status
+from server.server import delete_track, get_track_deletion_status
 
 
 class TestDeleteTrackSafetyGuard:
     """Prevent deleting the final remaining session track."""
 
-    @patch('MCP_Server.server.get_ableton_connection')
+    @patch('server.server.get_ableton_connection')
     def test_blocks_delete_by_index_when_only_one_track_remains(self, mock_conn):
         mock_ableton = MagicMock()
         mock_ableton.send_command.return_value = {"track_count": 1}
@@ -31,7 +31,7 @@ class TestDeleteTrackSafetyGuard:
         assert "Create a new track before deleting" in result
         mock_ableton.send_command.assert_called_once_with("get_session_info")
 
-    @patch('MCP_Server.server.get_ableton_connection')
+    @patch('server.server.get_ableton_connection')
     def test_blocks_delete_by_name_when_only_one_track_remains(self, mock_conn):
         mock_ableton = MagicMock()
         mock_ableton.send_command.return_value = {"track_count": 1}
@@ -47,7 +47,7 @@ class TestDeleteTrackSafetyGuard:
 class TestDeleteTrackBehavior:
     """Normal delete behavior when more than one track exists."""
 
-    @patch('MCP_Server.server.get_ableton_connection')
+    @patch('server.server.get_ableton_connection')
     def test_delete_by_index_still_works_with_multiple_tracks(self, mock_conn):
         mock_ableton = MagicMock()
         mock_ableton.send_command.side_effect = [
@@ -63,7 +63,7 @@ class TestDeleteTrackBehavior:
         assert calls[1][0][0] == "delete_track"
         assert calls[1][0][1]["track_index"] == 1  # 2 -> 1
 
-    @patch('MCP_Server.server.get_ableton_connection')
+    @patch('server.server.get_ableton_connection')
     def test_delete_by_name_resolves_and_deletes(self, mock_conn):
         mock_ableton = MagicMock()
         mock_ableton.send_command.side_effect = [
@@ -85,7 +85,7 @@ class TestDeleteTrackBehavior:
 class TestTrackDeletionStatus:
     """Tests for get_track_deletion_status precheck tool."""
 
-    @patch('MCP_Server.server.get_ableton_connection')
+    @patch('server.server.get_ableton_connection')
     def test_reports_blocked_when_one_track_remains(self, mock_conn):
         mock_ableton = MagicMock()
         mock_ableton.send_command.return_value = {"track_count": 1}
@@ -96,7 +96,7 @@ class TestTrackDeletionStatus:
         assert "Track deletion blocked" in result
         assert "Create a new track before deleting" in result
 
-    @patch('MCP_Server.server.get_ableton_connection')
+    @patch('server.server.get_ableton_connection')
     def test_reports_max_deletions_when_multiple_tracks_exist(self, mock_conn):
         mock_ableton = MagicMock()
         mock_ableton.send_command.return_value = {"track_count": 4}
