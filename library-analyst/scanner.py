@@ -56,8 +56,13 @@ def iter_audio_files(root):
         raise SystemExit(f"error: not a folder: {root} "
                          "(zips must be extracted first)")
     for p in sorted(root.rglob("*")):
-        if p.is_file() and p.suffix.lower() in AUDIO_EXTS:
-            yield p
+        if not (p.is_file() and p.suffix.lower() in AUDIO_EXTS):
+            continue
+        # skip macOS AppleDouble junk ("._foo.wav") and hidden files —
+        # they're metadata stubs, not audio, and always fail analysis
+        if p.name.startswith("._") or p.name.startswith("."):
+            continue
+        yield p
 
 
 def scan(roots, db_path=None, progress=True):
@@ -70,6 +75,8 @@ def scan(roots, db_path=None, progress=True):
     """
     conn = dbmod.connect(db_path)
     cur = conn.cursor()
+    # purge any junk rows indexed before the AppleDouble filter existed
+    cur.execute("DELETE FROM samples WHERE filename LIKE '.%'")
     added = updated = unchanged = 0
     seen_paths = []
 

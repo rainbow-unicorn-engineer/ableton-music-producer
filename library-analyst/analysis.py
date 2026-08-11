@@ -298,7 +298,10 @@ def analyze_pending(db_path=None, limit=None, progress=True):
         except Exception as exc:
             failed += 1
             if progress:
-                print(f"  ! {Path(row['path']).name}: {exc}", file=sys.stderr)
+                msg = str(exc) or type(exc).__name__
+                if "NoBackendError" in repr(exc):
+                    msg = "no decoder for this format (install FFmpeg and re-run)"
+                print(f"  ! {Path(row['path']).name}: {msg}", file=sys.stderr)
         if progress and (i + 1) % 200 == 0:
             rate = (i + 1) / max(time.time() - t0, 1e-9)
             remaining = (len(rows) - i - 1) / max(rate, 1e-9)
