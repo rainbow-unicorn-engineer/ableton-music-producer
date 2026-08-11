@@ -1,0 +1,27 @@
+# Databases (library analyst) — regenerate by re-scanning
+library-analyst/db/*
+!library-analyst/db/.gitkeep
+
+# Audio + Ableton project files never belong in git
+*.wav
+*.aif
+*.aiff
+*.mp3
+*.flac
+*.als
+*.asd
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Secrets
+.env
+
+# OS noise
+Thumbs.db
+.DS_Store
