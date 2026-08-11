@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "XLNT-Ableton": {
+      "command": "python",
+      "args": ["C:/path/to/xlnt-studio/ableton-mcp/server/server.py"]
+    }
+  }
+}
