@@ -2,7 +2,11 @@
   "mcpServers": {
     "XLNT-Ableton": {
       "command": "python",
-      "args": ["C:/path/to/xlnt-studio/ableton-mcp/server/server.py"]
+      "args": ["C:/Users/gavin/PycharmProjects/xlnt-studio/ableton-mcp/server/server.py"]
+    },
+    "XLNT-Library": {
+      "command": "python",
+      "args": ["C:/Users/gavin/PycharmProjects/xlnt-studio/library-analyst/mcp_server.py"]
     }
   }
 }

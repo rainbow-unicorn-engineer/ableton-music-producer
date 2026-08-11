@@ -36,8 +36,8 @@ in this repo.
 | Phase | Component | State |
 |-------|-----------|-------|
 | 0 | Repo, docs, conventions | ✅ done |
-| 1 | `ableton-mcp/` — hybrid TCP/UDP server + Remote Script + als injectors + `param_dump` | ✅ built, awaiting on-machine smoke tests |
-| 2 | `library-analyst/` | ⬜ next |
+| 1 | `ableton-mcp/` — hybrid TCP/UDP server + Remote Script + als injectors + `param_dump` | ✅ built, smoke-tested on the studio machine |
+| 2 | `library-analyst/` — scanner, analysis, `find_sounds` MCP server | ✅ built — run the trial scan (see its README) |
 | 3 | `plugin-dictionary/` + AGT macro racks | 🌱 template seeded, grows with use |
 | 4 | `ears/` | ⬜ (the `AudioCapture.amxd` recorder patch is already vendored in `ableton-mcp/tools/max4live/`) |
 | 5 | `skills/` style cookbook | ⬜ forever ongoing |

@@ -3,6 +3,24 @@
 Newest first. One entry per decision that a future collaborator (human or
 agent) might want to reverse.
 
+## 2026-08-11 — Analyst has a librosa-first, numpy-fallback engine
+
+`analysis.py` uses librosa when importable (the plan's choice — best BPM
+and chroma estimators) and otherwise falls back to a built-in numpy/scipy
+engine (STFT centroid, spectral-flux onsets, autocorrelation tempo,
+Krumhansl key matching; WAV-only). Same output format either way. Reason:
+the fallback keeps the test suite runnable in any environment, and keeps
+the analyst alive if a librosa install ever breaks. The fallback is the
+fully-tested path; librosa calls are standard one-liners.
+
+## 2026-08-11 — find_sounds maps words to features, CLAP deferred
+
+"dark" means brightness below the library's own median — relative to YOUR
+sounds, not a universal constant. Word→feature mapping lives in
+`search.py`; CLAP embeddings (true vibe search) remain the planned
+power-up, and the `embedding` column already waits for them. Ship the
+cake, add the cherry later — the plan's own build order.
+
 ## 2026-08-11 — Two Remote Scripts, enable one at a time
 
 uisato ships a full-featured TCP-only script (~2,150 lines, 46 commands)
