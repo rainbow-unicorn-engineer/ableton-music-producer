@@ -1,0 +1,279 @@
+# XLNT Studio — Custom Ableton MCP Build Guide
+
+**Goal:** The best Ableton AI integration in existence — hybrid TCP/UDP control, a library analyst that knows every sound you own, a plugin dictionary the agent can act on, and an audio feedback pipeline that gives the AI ears.
+
+**Jargon rule:** every technical term gets a plain-English translation the first time it appears, marked with →.
+
+---
+
+## The Architecture (what we're building)
+
+```
+┌─────────────────────────────────────────────────┐
+│              YOU + CLAUDE (the brain)           │
+│         Claude Desktop / Claude Code            │
+└───────┬──────────┬──────────┬──────────┬────────┘
+        │          │          │          │
+   ┌────▼────┐ ┌───▼────┐ ┌───▼─────┐ ┌──▼──────┐
+   │Producer │ │ Custom │ │ Library │ │  Audio  │
+   │  Pal    │ │  MCP   │ │ Analyst │ │  Ears   │
+   │(stable  │ │(TCP+UDP│ │(your    │ │(spectro-│
+   │ core)   │ │ hybrid)│ │ sounds) │ │ grams)  │
+   └────┬────┘ └───┬────┘ └─────────┘ └─────────┘
+        │          │
+   ┌────▼──────────▼────┐
+   │   ABLETON LIVE 12  │
+   └────────────────────┘
+```
+
+Five components. Producer Pal is installed, not built. The other four live in your repo.
+
+---
+
+## Phase 0 — Foundations (Day 1, ~1 hour)
+
+### 0.1 Prerequisites checklist
+
+- [ ] **Python 3.10+** — `python --version` to check
+- [ ] **Git** — `git --version`
+- [ ] **uv** (fast Python package manager, optional but recommended): `pip install uv`
+- [ ] **FFmpeg** (audio file swiss-army knife, needed later for the analyst): download from ffmpeg.org, add to PATH
+- [ ] **Claude Desktop** installed on the Alienware
+- [ ] **Claude Code** installed (`npm install -g @anthropic-ai/claude-code`) — this is your coding workshop where the agent edits the repo with you
+
+### 0.2 Create the monorepo
+
+→ *A monorepo is one repository containing all related projects, instead of scattering them across many repos. Right choice here because the pieces share code (the analysis functions serve both the library analyst and the audio ears).*
+
+```bash
+mkdir xlnt-studio && cd xlnt-studio
+git init
+gh repo create xlnt-studio --private --source=. # or create on github.com manually
+```
+
+**Repo structure — create these folders now, fill them by phase:**
+
+```
+xlnt-studio/
+├── README.md               # what this is, how to run each piece
+├── CLAUDE.md               # instructions Claude Code reads automatically:
+│                           #   jargon rule, repo map, coding conventions
+├── ableton-mcp/            # PHASE 1: the custom hybrid server
+│   ├── server/             #   Python MCP server (TCP control plane)
+│   ├── remote_script/      #   the script that lives inside Ableton
+│   ├── udp/                #   UDP performance plane (real-time streaming)
+│   └── tools/              #   custom tools (als_inject, param_dump, etc.)
+├── library-analyst/        # PHASE 2: your sound library brain
+│   ├── scanner.py
+│   ├── analysis.py
+│   ├── db/                 #   SQLite database lives here (gitignored)
+│   └── mcp_server.py
+├── plugin-dictionary/      # PHASE 3: one markdown file per plugin
+│   ├── _TEMPLATE.md
+│   ├── serum2.md
+│   ├── pro-c2.md
+│   └── ...
+├── skills/                 # PHASE 5: style cookbook (production recipes)
+│   └── tape-b-dub-bounce.md
+├── ears/                   # PHASE 4: audio feedback pipeline
+│   ├── spectrogram.py
+│   └── loudness.py
+└── docs/                   # setup notes, decisions, lessons learned
+```
+
+- [ ] Add a `.gitignore`: `db/`, `*.wav`, `*.als`, `__pycache__/`, `.env`
+- [ ] Write `CLAUDE.md` with: "Explain all audio jargon in plain English. Never assume producer vocabulary. This repo controls Ableton Live 12 on Windows."
+
+### 0.3 Install Producer Pal (the stable core)
+
+- [ ] Download the `.amxd` device + `.mcpb` extension from producer-pal.org
+- [ ] Double-click `.mcpb` → installs into Claude Desktop
+- [ ] Drop `Producer_Pal.amxd` on an empty MIDI track named `PP`
+- [ ] Save that track into your default template (File → Save Live Set as Default)
+- [ ] Test in Claude Desktop: "connect to my Live set and tell me the tempo"
+
+**Why keep Producer Pal when we're building our own?** It's the reliable fallback while the custom server is under construction, and its Agent Skill/REST API are reference implementations to learn from. Retire it later if the custom build fully surpasses it.
+
+---
+
+## Phase 1 — The Hands: Hybrid TCP/UDP Server (Week 1)
+
+**Strategy:** don't build from scratch. Fork uisato's `ableton-mcp-extended` (it already has TCP + UDP + the Remote Script), then graft Hurliman's custom tools onto it.
+
+### 1.1 Base install
+
+- [ ] `git clone https://github.com/uisato/ableton-mcp-extended.git` into a scratch folder
+- [ ] Copy its `MCP_Server/` into `xlnt-studio/ableton-mcp/server/` and its Remote Script into `ableton-mcp/remote_script/` — commit as "vendor baseline" so all your changes are diffable
+- [ ] `pip install -e .` (or `uv pip install -e .`)
+- [ ] Install the Remote Script: copy the `AbletonMCP` folder into Ableton's `MIDI Remote Scripts` directory
+  - Windows: `C:\ProgramData\Ableton\Live 12 Suite\Resources\MIDI Remote Scripts\`
+- [ ] In Ableton: Preferences → Link/Tempo/MIDI → Control Surface dropdown → select **AbletonMCP**, set its Input and Output to **None**
+- [ ] Register the server in Claude Desktop's config (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "XLNT-Ableton": {
+      "command": "python",
+      "args": ["C:/path/to/xlnt-studio/ableton-mcp/server/server.py"]
+    }
+  }
+}
+```
+
+- [ ] **Smoke test** → *a quick "does it turn on" test:* "Create a MIDI track named TEST and write a 1-bar C minor chord." Verify it appears in Ableton.
+
+### 1.2 How the two planes divide the work
+
+| Plane | Protocol | Use for | Why |
+|-------|----------|---------|-----|
+| Control | TCP | Creating tracks/clips, writing MIDI, loading devices, reading session state | Must arrive exactly once, in order. A dropped packet here = corrupted project. |
+| Performance | UDP | Continuous parameter streams: filter sweeps, macro rides, live tweaks during playback | Speed over certainty. A dropped packet = one missed knob position out of 60/sec. Inaudible. |
+
+- [ ] Run uisato's UDP example (the XY controller demo) to confirm the UDP path works
+- [ ] **UDP smoke test:** stream a sine-shaped sweep to a mapped macro while a loop plays; watch the knob glide
+
+### 1.3 Graft Hurliman's tools
+
+- [ ] Add his repo's custom tools into `ableton-mcp/tools/` as separate modules — cherry-pick, don't wholesale copy. Priority order:
+  1. **`.als` injection tools** (tempo automation, warp markers) — the diff-detective work is already done
+  2. **WAV recorder Max patch** — you'll need it for Phase 4 (getting audio OUT of Ableton)
+  3. `vocal_to_midi` and structure-analysis endpoints — later, when vocals enter the workflow
+- [ ] For each grafted tool: test it in isolation with Claude Code before wiring it into the MCP server
+- [ ] Commit after each working tool, message format: `tool: als tempo injection working`
+
+### 1.4 The param_dump tool (unlocks all plugins)
+
+Your first original tool. → *Every plugin exposes its knobs to Ableton as a numbered list (parameter 0, 1, 2...) but the numbers are meaningless without names. This tool dumps the full name↔number map.*
+
+- [ ] Write `tools/param_dump.py`: given a track+device, iterate `device.parameters`, output JSON of `{index, name, min, max, current_value}`
+- [ ] Run it on Serum 2 → save output to `plugin-dictionary/serum2.params.json`
+- [ ] Repeat for each FabFilter, Soundtoys, KClip, Waves, Native Instruments as you first use them
+- [ ] Now "set Serum's filter cutoff to 40%" is a real, executable command
+
+---
+
+## Phase 2 — The Memory: Library Analyst (Weeks 2–3)
+
+The piece nobody ships. An MCP server that knows every sound you own.
+
+### 2.1 Scanner (`scanner.py`)
+
+- [ ] Walk your sample directories (start with one folder to test, then the full library)
+- [ ] For each audio file (`.wav`, `.aif`, `.mp3`, `.flac`): store path, filename, size, hash → *a fingerprint of the file's contents, so re-scans skip unchanged files*
+- [ ] Store in SQLite → *a database that's just a single file — no server to run, perfect here*
+
+### 2.2 Analysis (`analysis.py`)
+
+Per file, extract with **librosa** (`pip install librosa`):
+
+| Feature | What it tells us | Plain English |
+|---------|-----------------|---------------|
+| BPM | `librosa.beat.beat_track` | tempo of loops |
+| Key/pitch | chroma features | what note/key a sample sits in |
+| Duration | — | one-shot vs. loop |
+| Spectral centroid | brightness score | dark rumble vs. bright sparkle |
+| Onset strength | punchiness | soft pad vs. hard transient |
+| RMS loudness | energy | quiet texture vs. full-power stab |
+
+- [ ] Optional power-up: **CLAP embeddings** → *a model that turns audio into coordinates in "meaning space," so the text "dark gritty texture" can literally be matched against sounds by distance.* (`pip install laion-clap`) Adds true vibe search.
+
+### 2.3 Database schema
+
+```sql
+CREATE TABLE samples (
+  id INTEGER PRIMARY KEY,
+  path TEXT UNIQUE, hash TEXT,
+  bpm REAL, key TEXT, duration REAL,
+  brightness REAL, punch REAL, loudness REAL,
+  category TEXT,        -- kick/snare/bass/texture/vocal/fx (folder-name heuristics first)
+  embedding BLOB        -- CLAP vector, if enabled
+);
+```
+
+### 2.4 MCP server (`mcp_server.py`)
+
+Expose these tools (use the official `mcp` Python SDK):
+
+- [ ] `find_sounds(description, key=None, bpm_range=None, category=None, limit=10)` — the star
+- [ ] `similar_to(path)` — "more like this one"
+- [ ] `analyze_file(path)` — full readout of any single file
+- [ ] `library_stats()` — coverage report: what you have lots of, what you lack
+- [ ] Register as a second server in Claude Desktop config alongside XLNT-Ableton
+- [ ] **The magic test:** "Find me a dark textured bass one-shot near F minor and load it onto a new audio track." (analyst finds → Ableton server loads — two servers cooperating)
+
+### 2.5 Build order with Claude Code
+
+1. [ ] Scanner on ONE folder → verify database rows appear
+2. [ ] Analysis on those files → sanity-check BPM/key against files you know
+3. [ ] Full library scan (run overnight; 80K files takes hours)
+4. [ ] MCP wrapper → wire into Claude Desktop
+5. [ ] CLAP embeddings last (it's the cherry, not the cake)
+
+---
+
+## Phase 3 — The Knowledge: Plugin Dictionary + Macro Racks (ongoing)
+
+**Rule: document plugins the day you first reach for them, not all upfront.** Seed with the workhorses.
+
+### 3.1 Dictionary template (`plugin-dictionary/_TEMPLATE.md`)
+
+```markdown
+# [Plugin Name]
+**What it is (plain English):**
+**When we reach for it:**
+**Key controls:** (name → what it does, in human words)
+**Macro rack:** AGT [name] — knob list with names
+**Agent access:** macro rack / direct params (see .params.json) / manual only
+**Gotchas:**
+**Recipes that use it:** (links into /skills)
+```
+
+### 3.2 Macro racks (the AGT presets)
+
+→ *A rack wraps a plugin and forwards its most important controls to up to 16 named knobs the agent can read and drive.*
+
+- [ ] Build and save to User Library, prefix `AGT `:
+  - [ ] `AGT Serum2` — Cutoff, Resonance, Wave Position, Unison Detune, Drive, LFO Rate, FX Mix, Space
+  - [ ] `AGT ProC2` — Threshold, Ratio, Attack, Release, Makeup, Dry/Wet
+  - [ ] `AGT Saturn2` — Drive, Mix, Tone
+  - [ ] `AGT Decapitator` — Drive, Mix, Tone, Style
+  - [ ] `AGT AlterBoy` — Pitch, Formant, Drive, Mix
+  - [ ] `AGT KClip` — Input Drive, Output Trim, Mix
+- [ ] Pro-Q 4 and Pro-L: **no rack** — dictionary entries marked "agent sets directly" (precision EQ moves and limiter gain work better as direct parameter calls)
+- [ ] Run `param_dump` on each plugin as you rack it; save the JSON next to its dictionary page
+
+---
+
+## Phase 4 — The Ears: Audio Feedback Pipeline (Weeks 3–4)
+
+→ *I can't hear audio natively — but I can read pictures and numbers derived from it.*
+
+- [ ] **Get audio out:** install the WAV-recorder Max for Live patch (from Hurliman's code) on the master track — toggle to bounce whatever plays
+- [ ] **`ears/spectrogram.py`:** render the WAV as a spectrogram → *picture of sound: time runs left-right, frequency low-high, brightness = energy.* Use `librosa.display.specshow`, save PNG
+- [ ] **`ears/loudness.py`:** measure LUFS → *the loudness standard streaming platforms use* — with `pyloudnorm`; report integrated LUFS + true peak
+- [ ] **Workflow:** bounce → run both scripts → drop PNG + numbers into chat → I read the mix (muddy low-mids, harsh 3–4k, weak sub, over-limited) and direct fixes
+- [ ] Pair with MiniMeters screenshots for real-time confirmation
+- [ ] Later: wrap as MCP tools (`analyze_bounce()`) so it's one command
+
+---
+
+## Phase 5 — The Soul: Style Cookbook + Actual Tracks (forever)
+
+- [ ] One recipe doc per style in `/skills`, built from dissecting reference tracks together — e.g., `tape-b-dub-bounce.md`, `ote-texture-beds.md`, `griz-funk-pocket.md`
+- [ ] Each recipe: arrangement math, sound palette (with `find_sounds` queries!), signature techniques, mix notes — concrete Ableton steps
+- [ ] **The rule that keeps this honest:** agent automates the mechanical 70% (setup, sound-finding, MIDI drafts, gain staging); you own the sacred 30% (what it says, how it feels, when it's done)
+
+---
+
+## Suggested Timeline
+
+| Week | Focus | Ship |
+|------|-------|------|
+| 1 | Phase 0 + 1 | Repo live, Producer Pal running, hybrid server passing smoke tests, param_dump working on Serum |
+| 2 | Phase 2 start + first track sketch | Scanner + analysis on test folder; a track in progress using the tools |
+| 3 | Phase 2 finish + Phase 3 seed | Full library scanned, `find_sounds` live, 6 AGT racks saved |
+| 4 | Phase 4 | Spectrogram + LUFS pipeline; first AI-assisted mix review |
+| ongoing | Phase 5 | Recipes and dictionary grow as walls are hit; tracks ship |
+
+**Anti-procrastination clause:** at least one *musical* session per week from Week 2 onward, even while building. The tools serve the tracks — never the reverse.
