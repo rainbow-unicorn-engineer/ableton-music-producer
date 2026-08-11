@@ -1,0 +1,30 @@
+{
+  "device_name": "ShaperBox 2",
+  "device_class": "PluginDevice",
+  "parameter_count": 2,
+  "parameters": [
+    {
+      "index": 0,
+      "name": "Device On",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 1.0,
+      "display_value": "On",
+      "is_quantized": true,
+      "value_items": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "index": 1,
+      "name": "Volume Gain Mid",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.5,
+      "display_value": "0.50 ",
+      "is_quantized": false,
+      "value_items": []
+    }
+  ]
+}

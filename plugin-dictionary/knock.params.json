@@ -1,0 +1,270 @@
+{
+  "device_name": "KNOCK",
+  "device_class": "PluginDevice",
+  "parameter_count": 26,
+  "parameters": [
+    {
+      "index": 0,
+      "name": "Device On",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 1.0,
+      "display_value": "On",
+      "is_quantized": true,
+      "value_items": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "index": 1,
+      "name": "Quality",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.0,
+      "display_value": "OFF",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 2,
+      "name": "Mix",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 1.0,
+      "display_value": "100.00",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 3,
+      "name": "Input Gain",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.5,
+      "display_value": "0.00 dB",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 4,
+      "name": "Output Gain",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.5,
+      "display_value": "0.00 dB",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 5,
+      "name": "Gain Match",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.0,
+      "display_value": "Off",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 6,
+      "name": "Punch",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.13,
+      "display_value": "13.00 %",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 7,
+      "name": "Transients Bypass",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.0,
+      "display_value": "Off",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 8,
+      "name": "Saturation",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.0,
+      "display_value": "0.00 dB",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 9,
+      "name": "Saturation Color",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.0,
+      "display_value": "Smooth",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 10,
+      "name": "Saturation Bypass",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.0,
+      "display_value": "Off",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 11,
+      "name": "Sub only",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.0,
+      "display_value": "Off",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 12,
+      "name": "Sub Gain",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.0,
+      "display_value": "-30.00 dB",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 13,
+      "name": "Sub Decay",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.2934,
+      "display_value": "160.00",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 14,
+      "name": "Sub Pitch",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.2598,
+      "display_value": "41.20 Hz",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 15,
+      "name": "Sub Pitch Notes",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.3333,
+      "display_value": "E1",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 16,
+      "name": "Sub Bypass",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.0,
+      "display_value": "Off",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 17,
+      "name": "EQ Color",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 1.0,
+      "display_value": "Clean",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 18,
+      "name": "Air",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.281,
+      "display_value": "2.81 dB",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 19,
+      "name": "Tone",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.5,
+      "display_value": "0.00",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 20,
+      "name": "High Cut",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 1.0,
+      "display_value": "20000.00",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 21,
+      "name": "Low Cut",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.0,
+      "display_value": "20.00",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 22,
+      "name": "EQ Bypass",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.0,
+      "display_value": "Off",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 23,
+      "name": "Clip",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.4187,
+      "display_value": "6.28 dB",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 24,
+      "name": "Clip Curve",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.0,
+      "display_value": "0.00",
+      "is_quantized": false,
+      "value_items": []
+    },
+    {
+      "index": 25,
+      "name": "Clip Bypass",
+      "min": 0.0,
+      "max": 1.0,
+      "current_value": 0.0,
+      "display_value": "Off",
+      "is_quantized": false,
+      "value_items": []
+    }
+  ]
+}
