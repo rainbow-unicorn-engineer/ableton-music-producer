@@ -2,7 +2,6 @@
 name = "xlnt-ableton-mcp"
 version = "0.1.0"
 description = "XLNT Studio's hybrid TCP/UDP Ableton Live MCP server (based on uisato/ableton-mcp-extended, MIT)"
-readme = "../README.md"
 requires-python = ">=3.10"
 license = "MIT"
 dependencies = [
