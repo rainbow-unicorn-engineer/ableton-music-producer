@@ -31,6 +31,7 @@ Usage:
 import argparse
 import json
 import math
+import re
 import sys
 import time
 import wave
@@ -54,6 +55,21 @@ except ImportError:
 MIN_LOOP_SECONDS = 1.5
 
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+# "...140bpm...", "...140 BPM...", "...bpm140..." in a filename. Sample
+# packs label their loops — trust the label over the detector, which
+# stumbles on halftime patterns (a 140 dubstep loop often reads as 93).
+_BPM_NAME_RE = re.compile(r"(?:^|[^0-9])(\d{2,3})\s?bpm|bpm\s?(\d{2,3})",
+                          re.IGNORECASE)
+
+
+def bpm_from_filename(path):
+    """Return the BPM a filename claims, or None. Sanity range 50-220."""
+    for m in _BPM_NAME_RE.finditer(Path(path).name):
+        val = float(m.group(1) or m.group(2))
+        if 50 <= val <= 220:
+            return val
+    return None
 
 # Krumhansl-Schmuckler key profiles → *how strongly each of the 12 pitch
 # classes "belongs" in a major or minor key, from listening experiments.
@@ -174,12 +190,13 @@ def analyze_file(path):
 
     punch = _punch(y, sr)
     loudness = float(np.sqrt(np.mean(y ** 2)))
+    name_bpm = bpm_from_filename(path)
 
     if HAVE_LIBROSA:
         centroid = float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)))
         chroma = np.mean(librosa.feature.chroma_stft(y=y_norm, sr=sr), axis=1)
-        bpm = None
-        if duration >= MIN_LOOP_SECONDS:
+        bpm = name_bpm
+        if bpm is None and duration >= MIN_LOOP_SECONDS:
             tempo = librosa.beat.beat_track(y=y, sr=sr)[0]
             tempo = float(np.atleast_1d(tempo)[0])
             bpm = round(tempo, 1) if tempo > 0 else None
@@ -191,12 +208,16 @@ def analyze_file(path):
         centroid = float(np.sum(freqs[:, None] * sel) / max(np.sum(sel), 1e-12))
         onset_env = _onset_envelope(spec)
         chroma = _chroma_fallback(spec, freqs)
-        bpm = _bpm_fallback(onset_env, sr, hop) if duration >= MIN_LOOP_SECONDS else None
+        bpm = name_bpm
+        if bpm is None and duration >= MIN_LOOP_SECONDS:
+            bpm = _bpm_fallback(onset_env, sr, hop)
 
     key = estimate_key(chroma)
     return {
         "duration": round(duration, 3),
         "bpm": bpm,
+        "bpm_source": ("filename" if name_bpm is not None
+                       else "detected" if bpm is not None else None),
         "key": key,
         "brightness": round(centroid, 1),
         "punch": round(punch, 3),

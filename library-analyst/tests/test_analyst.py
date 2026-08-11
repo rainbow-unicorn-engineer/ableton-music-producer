@@ -159,6 +159,21 @@ def test_bpm_detection_on_loop(library):
     assert any(abs(bpm - target) < 5 for target in (70, 140, 280))
 
 
+def test_bpm_from_filename():
+    assert analysis.bpm_from_filename("XLNT - Full Loop 19 - Dubstep - 140bpm.wav") == 140
+    assert analysis.bpm_from_filename("groove_128 BPM_dark.wav") == 128
+    assert analysis.bpm_from_filename("bpm90_shuffle.wav") == 90
+    assert analysis.bpm_from_filename("808_kick.wav") is None       # 808 ≠ bpm
+    assert analysis.bpm_from_filename("no_tempo_here.wav") is None
+
+
+def test_filename_bpm_wins(tmp_path):
+    f = tmp_path / "Loops" / "test_loop_133bpm.wav"
+    write_wav(f, synth_bass_loop(bpm=140.0))  # detector would say ~140
+    feats = analysis.analyze_file(f)
+    assert feats["bpm"] == 133 and feats["bpm_source"] == "filename"
+
+
 def test_analyze_single_file(library):
     root, _ = library
     feats = analysis.analyze_file(root / "Synths" / "Pads" / "warm_pad_Fmin.wav")
