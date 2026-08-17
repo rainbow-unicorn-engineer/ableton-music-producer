@@ -16,6 +16,7 @@ except ImportError:
 
 # Constants for socket communication
 DEFAULT_PORT = 9877
+UDP_PORT = 9878  # performance plane: lossy, fast, for continuous knob streams
 HOST = "localhost"
 
 def create_instance(c_instance):
@@ -35,12 +36,18 @@ class AbletonMCP(ControlSurface):
         self.client_threads = []
         self.server_thread = None
         self.running = False
-        
+
+        # UDP performance plane (merged from AbletonMCP_UDP)
+        self.udp_server_socket = None
+        self.udp_server_thread = None
+
         # Cache the song reference for easier access
         self._song = self.song()
-        
+
         # Start the socket server
         self.start_server()
+        # Start the UDP performance plane (never fatal to the TCP plane)
+        self.start_udp_server()
         
         self.log_message("AbletonMCP initialized")
         
@@ -62,7 +69,16 @@ class AbletonMCP(ControlSurface):
         # Wait for the server thread to exit
         if self.server_thread and self.server_thread.is_alive():
             self.server_thread.join(1.0)
-            
+
+        # Stop the UDP performance plane
+        if self.udp_server_socket:
+            try:
+                self.udp_server_socket.close()
+            except:
+                pass
+        if self.udp_server_thread and self.udp_server_thread.is_alive():
+            self.udp_server_thread.join(1.0)
+
         # Clean up any client threads
         for client_thread in self.client_threads[:]:
             if client_thread.is_alive():
@@ -206,7 +222,99 @@ class AbletonMCP(ControlSurface):
             except:
                 pass
             self.log_message("Client handler stopped")
-    
+
+    # ------------------------------------------------------------------
+    # UDP performance plane (merged from AbletonMCP_UDP per the roadmap:
+    # TCP = control plane, exactly-once; UDP = lossy 60/sec knob streams.
+    # A dropped datagram is one missed knob position — inaudible.)
+    # ------------------------------------------------------------------
+
+    def start_udp_server(self):
+        """Start the UDP listener. Failure here must never take down the
+        TCP control plane — worst case we just lose the fast lane."""
+        try:
+            self.udp_server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.udp_server_socket.bind((HOST, UDP_PORT))
+            self.udp_server_thread = threading.Thread(target=self._udp_server_loop)
+            self.udp_server_thread.daemon = True
+            self.udp_server_thread.start()
+            self.log_message("UDP performance plane started on port " + str(UDP_PORT))
+        except Exception as e:
+            self.log_message("Error starting UDP server (TCP unaffected): " + str(e))
+            self.show_message("AbletonMCP: UDP unavailable - " + str(e))
+
+    def _udp_server_loop(self):
+        """Receive datagrams and hand them to the main thread. No replies:
+        UDP senders never wait."""
+        try:
+            self.log_message("UDP server thread started")
+            while self.running:
+                try:
+                    data, addr = self.udp_server_socket.recvfrom(2048)
+                    if not self.running:
+                        break
+                    try:
+                        command = json.loads(data.decode('utf-8'))
+                        self._process_udp_command(command)
+                    except Exception as e:
+                        self.log_message("UDP: bad datagram: " + str(e))
+                except socket.error:
+                    # Socket closed (disconnect) or transient failure
+                    if self.running:
+                        time.sleep(0.1)
+                    else:
+                        break
+                except Exception as e:
+                    if self.running:
+                        self.log_message("UDP loop error: " + str(e))
+                    time.sleep(0.1)
+            self.log_message("UDP server thread stopped")
+        except Exception as e:
+            self.log_message("UDP server thread critical error: " + str(e))
+
+    def _process_udp_command(self, command):
+        """Fast path: only parameter moves, executed on Live's main thread
+        via schedule_message. Anything else is silently logged - use TCP."""
+        command_type = command.get("type", "")
+        params = command.get("params", {})
+
+        def task():
+            try:
+                if command_type == "set_device_parameter":
+                    self._set_device_parameter(
+                        params.get("track_index", 0),
+                        params.get("device_index", 0),
+                        chain_index=params.get("chain_index"),
+                        parameter_name=params.get("parameter_name"),
+                        parameter_index=params.get("parameter_index"),
+                        value=params.get("value", 0.0))
+                elif command_type == "batch_set_device_parameters":
+                    indices = params.get("parameter_indices", [])
+                    values = params.get("values", [])
+                    for p_idx, val in zip(indices, values):
+                        try:
+                            self._set_device_parameter(
+                                params.get("track_index", 0),
+                                params.get("device_index", 0),
+                                chain_index=params.get("chain_index"),
+                                parameter_index=p_idx,
+                                value=val)
+                        except Exception as e_one:
+                            self.log_message("UDP batch: param " + str(p_idx)
+                                             + " failed: " + str(e_one))
+                else:
+                    self.log_message("UDP: unsupported command '" + str(command_type)
+                                     + "' - use the TCP control plane")
+            except Exception as e_task:
+                self.log_message("UDP task error (" + str(command_type) + "): "
+                                 + str(e_task))
+
+        try:
+            self.schedule_message(0, task)
+        except AssertionError:
+            # Already on the main thread (e.g. tests) - run directly
+            task()
+
     def _process_command(self, command):
         """Process a command from the client and return a response"""
         command_type = command.get("type", "")
@@ -241,7 +349,8 @@ class AbletonMCP(ControlSurface):
                                  "set_device_parameter", "set_device_enabled",
                                  "delete_device", "navigate_preset",
                                  "delete_track",
-                                 "set_track_volume", "set_track_panning"]:
+                                 "set_track_volume", "set_track_panning",
+                                 "set_master_device_parameter"]:
                 # Use a thread-safe approach with a response queue
                 response_queue = queue.Queue()
                 
@@ -366,6 +475,12 @@ class AbletonMCP(ControlSurface):
                             pi = params.get("parameter_index", None)
                             val = params.get("value", 0.0)
                             result = self._set_device_parameter(ti, di, ci, pn, pi, val)
+                        elif command_type == "set_master_device_parameter":
+                            di = params.get("device_index", 0)
+                            pn = params.get("parameter_name", None)
+                            pi = params.get("parameter_index", None)
+                            val = params.get("value", 0.0)
+                            result = self._set_master_device_parameter(di, pn, pi, val)
                         elif command_type == "set_device_enabled":
                             ti = params.get("track_index", 0)
                             di = params.get("device_index", 0)
@@ -461,6 +576,17 @@ class AbletonMCP(ControlSurface):
                 ti = params.get("track_index", 0)
                 di = params.get("device_index", 0)
                 response["result"] = self._get_drum_pad_info(ti, di)
+            elif command_type == "get_clip_notes":
+                ti = params.get("track_index", 0)
+                ci = params.get("clip_index", 0)
+                arrangement = params.get("arrangement", False)
+                response["result"] = self._get_clip_notes(ti, ci, arrangement)
+            elif command_type == "get_master_devices":
+                response["result"] = self._get_master_devices()
+            elif command_type == "get_master_device_parameters":
+                di = params.get("device_index", 0)
+                show_all = params.get("show_all", False)
+                response["result"] = self._get_master_device_parameters(di, show_all)
             else:
                 response["status"] = "error"
                 response["message"] = "Unknown command: " + command_type
@@ -1391,6 +1517,103 @@ class AbletonMCP(ControlSurface):
             return {"note_count": len(notes)}
         except Exception as e:
             self.log_message("Error adding notes to arrangement clip: " + str(e))
+            raise
+
+    def _get_clip_notes(self, track_index, clip_index, arrangement=False):
+        """Read MIDI notes out of a session or arrangement clip."""
+        try:
+            if arrangement:
+                track, clip = self._resolve_arrangement_clip(track_index, clip_index)
+            else:
+                if track_index < 0 or track_index >= len(self._song.tracks):
+                    raise IndexError("Track index out of range")
+                track = self._song.tracks[track_index]
+                if clip_index < 0 or clip_index >= len(track.clip_slots):
+                    raise IndexError("Clip index out of range")
+                slot = track.clip_slots[clip_index]
+                if not slot.has_clip:
+                    raise ValueError("No clip in slot {0}".format(clip_index))
+                clip = slot.clip
+            if not clip.is_midi_clip:
+                raise ValueError("Clip is not a MIDI clip")
+            raw = clip.get_notes(0.0, 0, clip.length, 128)
+            notes = [{"pitch": n[0], "start_time": n[1], "duration": n[2],
+                      "velocity": n[3], "mute": n[4]} for n in raw]
+            return {"clip_name": clip.name, "length": clip.length,
+                    "note_count": len(notes), "notes": notes}
+        except Exception as e:
+            self.log_message("Error getting clip notes: " + str(e))
+            raise
+
+    def _get_master_devices(self):
+        """List the devices on the master track."""
+        try:
+            master = self._song.master_track
+            return {"track": "Master",
+                    "devices": [{"index": i, "name": d.name,
+                                 "class_name": d.class_name}
+                                for i, d in enumerate(master.devices)]}
+        except Exception as e:
+            self.log_message("Error getting master devices: " + str(e))
+            raise
+
+    def _get_master_device(self, device_index):
+        master = self._song.master_track
+        if device_index < 0 or device_index >= len(master.devices):
+            raise IndexError("Master device index {0} out of range (0-{1})".format(
+                device_index, len(master.devices) - 1 if master.devices else 0))
+        return master.devices[device_index]
+
+    def _get_master_device_parameters(self, device_index, show_all=False):
+        """Full parameter list for a master-track device."""
+        try:
+            device = self._get_master_device(device_index)
+            param_list = []
+            for i, p in enumerate(device.parameters):
+                pmin, pmax, raw_val = p.min, p.max, p.value
+                norm = (raw_val - pmin) / (pmax - pmin) if pmax != pmin else 0.0
+                param_list.append({
+                    "index": i, "name": p.name, "value": round(norm, 4),
+                    "min": pmin, "max": pmax, "display_value": str(p),
+                    "is_enabled": p.is_enabled, "is_quantized": p.is_quantized,
+                    "value_items": list(p.value_items) if p.is_quantized else [],
+                })
+            return {"device_name": device.name, "device_class": device.class_name,
+                    "parameter_count": len(param_list), "parameters": param_list}
+        except Exception as e:
+            self.log_message("Error getting master device parameters: " + str(e))
+            raise
+
+    def _set_master_device_parameter(self, device_index, parameter_name=None,
+                                     parameter_index=None, value=0.0):
+        """Set a master-track device parameter. Value normalized 0.0-1.0."""
+        try:
+            device = self._get_master_device(device_index)
+            params = device.parameters
+            target = None
+            if parameter_index is not None:
+                if parameter_index < 0 or parameter_index >= len(params):
+                    raise IndexError("Parameter index out of range")
+                target = params[parameter_index]
+            elif parameter_name:
+                low = parameter_name.lower()
+                for p in params:
+                    if p.name.lower() == low:
+                        target = p
+                        break
+                if target is None:
+                    for p in params:
+                        if low in p.name.lower():
+                            target = p
+                            break
+            if target is None:
+                raise ValueError("Parameter not found: {0}".format(parameter_name))
+            clamped = max(0.0, min(1.0, value))
+            target.value = target.min + (target.max - target.min) * clamped
+            return {"parameter": target.name, "display_value": str(target),
+                    "normalized": clamped}
+        except Exception as e:
+            self.log_message("Error setting master device parameter: " + str(e))
             raise
 
     def _delete_arrangement_clip(self, track_index, clip_index=None, clip_name=None):

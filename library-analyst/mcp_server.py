@@ -10,7 +10,10 @@ docs/claude_desktop_config.sample.json), and the two cooperate:
       → the analyst finds it (this server)
       → the Ableton server loads it (XLNT-Ableton)
 
-Tools: find_sounds (the star), similar_to, analyze_file, library_stats.
+Tools: find_sounds (the star), similar_to, analyze_file, library_stats,
+analyze_bounce — and the reverse-engineering pipeline: make_reference_card,
+list_reference_cards, compare_mix, analyze_structure, separate_stems,
+extract_midi.
 """
 
 import json
@@ -84,6 +87,163 @@ def analyze_bounce(path: str, out_dir: str = None) -> str:
     sys.path.insert(0, str(ears_dir))
     import analyze_bounce as ab
     return json.dumps(ab.analyze(path, out_dir), indent=2)
+
+
+@mcp.tool()
+def vibe_search(description: str = None, audio_path: str = None,
+                category: str = None, limit: int = 10) -> str:
+    """TRUE vibe search: rank the whole library by CLAP meaning-space
+    similarity to a sentence ("haunted carousel music box", "abandoned
+    mall energy") or to a piece of audio (audio_path = any file on disk —
+    'find me sounds like THIS drop'). Works beyond filenames and stored
+    features — it's judging by how things actually sound. Optional
+    category filter (bass/kick/vocal/...). Needs the one-time embedding
+    scan; if it says so, fall back to find_sounds. First query in a
+    session takes ~10-30 s (model loads), then it's fast."""
+    import vibe as vibe_mod
+    return json.dumps(vibe_mod.vibe_search(description=description,
+                                           audio_path=audio_path,
+                                           category=category, limit=limit),
+                      indent=2)
+
+
+@mcp.tool()
+def similar_sound(path: str, limit: int = 10) -> str:
+    """'More like this one', judged by EAR (CLAP embeddings) instead of
+    by stored feature numbers — finds sounds that share the vibe, not
+    just the brightness/punch stats. `path` can be a library file
+    (instant, uses its stored vector) or any audio file on disk. Use
+    similar_to for the fast feature-based version."""
+    import vibe as vibe_mod
+    return json.dumps(vibe_mod.similar_sound(path, limit=limit), indent=2)
+
+
+@mcp.tool()
+def embedding_status() -> str:
+    """How much of the library has CLAP embeddings (vibe search
+    coverage): analyzed vs embedded vs remaining. If remaining is large,
+    the overnight scan hasn't run (or hasn't finished)."""
+    import embeddings as emb_mod
+    return json.dumps(emb_mod.embedding_coverage(), indent=2)
+
+
+def _ears_import(module_name):
+    """Import a module from the ears package (monorepo sibling)."""
+    ears_dir = Path(__file__).resolve().parents[1] / "ears"
+    if str(ears_dir) not in sys.path:
+        sys.path.insert(0, str(ears_dir))
+    import importlib
+    return importlib.import_module(module_name)
+
+
+@mcp.tool()
+def make_reference_card(path: str, name: str = None, bpm: float = None) -> str:
+    """Analyze a reference track ONCE into a permanent 'reference card':
+    loudness DNA (LUFS, true peak, dynamics), band balance, key, tempo,
+    arrangement skeleton (intro 16 -> build 16 -> drop 32...), spectrogram
+    and structure PNGs. Cards live in references/ at the repo root and are
+    what compare_mix diffs bounces against. Pass bpm if the filename
+    doesn't contain it and detection might stumble (e.g. halftime)."""
+    refs = _ears_import("references")
+    card = refs.make_card(path, name=name, bpm=bpm)
+    return json.dumps({k: v for k, v in card.items()
+                       if k != "bar_energy_db"}, indent=2)
+
+
+@mcp.tool()
+def list_reference_cards() -> str:
+    """All saved reference cards: name, key, BPM, LUFS, true peak, and
+    arrangement skeleton. Use before compare_mix to see what's on file."""
+    refs = _ears_import("references")
+    return json.dumps(refs.list_cards(), indent=2)
+
+
+@mcp.tool()
+def compare_mix(bounce: str, reference: str, png: bool = False) -> str:
+    """The reverse-engineering workhorse: diff a bounce against a
+    reference — loudness delta (LU), true peak, dynamics, and band-by-band
+    balance gaps ('their sub sits 6 dB above their low-mids; yours
+    doesn't'). `reference` is a saved card name (see list_reference_cards)
+    or any audio file path (analyzed on the fly). png=True also renders
+    both spectrograms stacked in one image. Returns JSON with a `gaps`
+    list — fix the top one first."""
+    cm = _ears_import("compare_mix")
+    result = cm.compare(bounce, reference, png=png)
+    result["summary"] = cm.summarize(result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def analyze_structure(path: str, bpm: float = None, png: bool = False) -> str:
+    """Extract a track's arrangement math: per-bar energy sliced at its
+    tempo, grouped into labeled sections (intro/build/drop/break/outro)
+    and a skeleton like 'intro 16 -> build 16 -> drop 32'. Feeds straight
+    into skills/ recipe docs. Tempo comes from `bpm`, the filename
+    ('ref 140bpm.wav'), or detection — in that order. png=True renders a
+    bar-energy chart with shaded sections."""
+    st = _ears_import("structure")
+    r = st.analyze_structure(path, bpm=bpm, png=png)
+    r.pop("bar_energy_db", None)
+    return json.dumps(r, indent=2)
+
+
+@mcp.tool()
+def separate_stems(path: str, out_dir: str = None, two_stems: str = None,
+                   analyze: bool = True) -> str:
+    """Split a finished track into stems (vocals / drums / bass / other)
+    with Demucs, then run the ears on each stem: per-stem LUFS, band
+    balance, spectrograms, and a stem-balance readout ('drums 2.1 LU under
+    the bass'). two_stems='vocals' gives vocals vs. everything-else.
+    Heavy: needs `pip install demucs` (~1 GB model on first run) and takes
+    minutes per track. analyze=False returns just the stem file paths."""
+    st = _ears_import("stems")
+    if analyze:
+        return json.dumps(st.analyze_stems(path, out_dir=out_dir,
+                                           two_stems=two_stems), indent=2)
+    return json.dumps(st.separate(path, out_dir=out_dir,
+                                  two_stems=two_stems), indent=2)
+
+
+@mcp.tool()
+def extract_midi(path: str, out: str = None, bpm: float = 120.0) -> str:
+    """Pull the notes out of audio into a .mid file you can drop onto an
+    Ableton MIDI track — a reference's chords or topline as editable MIDI.
+    Polyphonic (hears chords) when basic-pitch is installed; otherwise a
+    built-in monophonic tracker (one note at a time — fine for basslines
+    and toplines). Best on a single stem from separate_stems, not the full
+    mix. Returns JSON with the note list and the .mid path."""
+    me = _ears_import("midi_extract")
+    return json.dumps(me.extract(path, out=out, bpm=bpm), indent=2)
+
+
+@mcp.tool()
+def analyze_clash(path_a: str, path_b: str, label_a: str = "vocal",
+                  label_b: str = "instrumental", png: bool = False) -> str:
+    """Find where two sounds FIGHT for the same frequencies (masking):
+    per-band contested-time percentages, the single worst frequency, and
+    concrete fixes ('duck 250-500 Hz in the instrumental when the vocal
+    plays'). Feed it a vocal stem vs your beat, your bass vs your kick,
+    or a reference's vocal vs its instrumental (via separate_stems) to
+    study how THEY made space. Files must share a sample rate."""
+    cl = _ears_import("clash")
+    return json.dumps(cl.analyze_clash(path_a, path_b, label_a, label_b,
+                                       png=png), indent=2)
+
+
+@mcp.tool()
+def mashup_match(acapella: str, beat: str, acapella_key: str = None,
+                 beat_key: str = None, acapella_bpm: float = None,
+                 beat_bpm: float = None) -> str:
+    """Make an acapella and a beat agree: detects both sides' key and BPM
+    (or takes overrides), then returns the exact Ableton moves — smallest
+    semitone transpose (using relative-key equivalence: A minor fits over
+    C major as-is), warp target with half/double-time awareness, and
+    warnings when the stretch (>8%) or shift (>4 st) will sound
+    unnatural. Also lists which keys need no transpose at all."""
+    mu = _ears_import("mashup")
+    return json.dumps(mu.match(acapella, beat, acapella_key=acapella_key,
+                               beat_key=beat_key, acapella_bpm=acapella_bpm,
+                               beat_bpm=beat_bpm), indent=2)
 
 
 @mcp.tool()

@@ -16,7 +16,8 @@ reply, add a plain-English translation marked with →.
 | `ableton-mcp/` | The custom hybrid MCP server: TCP control plane + UDP performance plane, the Remote Script that lives inside Ableton, and custom tools (`als` injectors, `param_dump`) | **Phase 1 — built** |
 | `library-analyst/` | Sound library scanner + analysis + SQLite + MCP server (`find_sounds`, `similar_to`, `analyze_file`, `library_stats`) | **Phase 2 — built** |
 | `plugin-dictionary/` | One markdown page per plugin + `.params.json` dumps from `param_dump` | Seeded (template only) |
-| `ears/` | Audio feedback pipeline: `analyze_bounce` (LUFS, true peak, band balance, spectrogram PNG) — CLI + MCP tool on XLNT-Library | **Phase 4 — built** |
+| `ears/` | Audio feedback pipeline: `analyze_bounce` (LUFS, true peak, band balance, spectrogram PNG) + the reverse-engineering pipeline: reference cards, `compare_mix`, structure analyzer, Demucs stems, MIDI extraction — CLI + MCP tools on XLNT-Library | **Phase 4 — built** · **RE pipeline — built** |
+| `references/` | Reference cards (JSON + PNGs) made by `ears/references.py` — one per target track, created on first use | Grows per reference |
 | `skills/` | Style cookbook — production recipes | Phase 5 — not started |
 | `docs/` | Setup guides, smoke tests, decisions, third-party attribution | Living |
 

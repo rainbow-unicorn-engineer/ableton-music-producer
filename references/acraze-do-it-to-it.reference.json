@@ -1,0 +1,107 @@
+{
+  "name": "acraze-do-it-to-it",
+  "source_file": "C:\\Users\\gavin\\Downloads\\ACRAZE - Do It To It (Extended Mix).wav",
+  "created": "2026-08-17 12:27",
+  "duration_s": 207.36,
+  "sample_rate": 44100,
+  "channels": 2,
+  "integrated_lufs": -8.54,
+  "true_peak_dbtp": 1.48,
+  "loudness_range_lu": 9.9,
+  "band_energy_db": {
+    "sub": 0.0,
+    "bass": -0.0,
+    "low-mid": -11.1,
+    "mid": -9.0,
+    "high-mid": -11.6,
+    "high": -12.8
+  },
+  "meter": "built-in BS.1770",
+  "key": "B minor",
+  "bpm": 123.0,
+  "structure": {
+    "skeleton": "intro 8 \u2192 drop 12 \u2192 break 4 \u2192 build 8 \u2192 drop 15 \u2192 drop 8 \u2192 break 5 \u2192 drop 4 \u2192 break 4 \u2192 drop 26 \u2192 outro 12",
+    "total_bars": 106,
+    "sections": [
+      {
+        "label": "intro",
+        "start_bar": 0,
+        "length_bars": 8,
+        "avg_energy_db": -8.3,
+        "sub_presence": 0.37
+      },
+      {
+        "label": "drop",
+        "start_bar": 8,
+        "length_bars": 12,
+        "avg_energy_db": -3.3,
+        "sub_presence": 0.64
+      },
+      {
+        "label": "break",
+        "start_bar": 20,
+        "length_bars": 4,
+        "avg_energy_db": -8.7,
+        "sub_presence": 0.34
+      },
+      {
+        "label": "build",
+        "start_bar": 24,
+        "length_bars": 8,
+        "avg_energy_db": -13.3,
+        "sub_presence": 0.1
+      },
+      {
+        "label": "drop",
+        "start_bar": 32,
+        "length_bars": 15,
+        "avg_energy_db": -1.4,
+        "sub_presence": 0.78
+      },
+      {
+        "label": "drop",
+        "start_bar": 47,
+        "length_bars": 8,
+        "avg_energy_db": -2.3,
+        "sub_presence": 0.76
+      },
+      {
+        "label": "break",
+        "start_bar": 55,
+        "length_bars": 5,
+        "avg_energy_db": -8.3,
+        "sub_presence": 0.37
+      },
+      {
+        "label": "drop",
+        "start_bar": 60,
+        "length_bars": 4,
+        "avg_energy_db": -7.9,
+        "sub_presence": 0.34
+      },
+      {
+        "label": "break",
+        "start_bar": 64,
+        "length_bars": 4,
+        "avg_energy_db": -8.2,
+        "sub_presence": 0.33
+      },
+      {
+        "label": "drop",
+        "start_bar": 68,
+        "length_bars": 26,
+        "avg_energy_db": -1.8,
+        "sub_presence": 0.69
+      },
+      {
+        "label": "outro",
+        "start_bar": 94,
+        "length_bars": 12,
+        "avg_energy_db": -36.9,
+        "sub_presence": 0.0
+      }
+    ]
+  },
+  "structure_png": "C:\\Users\\gavin\\PycharmProjects\\xlnt-studio\\references\\ACRAZE - Do It To It (Extended Mix).structure.png",
+  "spectrogram_png": "C:\\Users\\gavin\\PycharmProjects\\xlnt-studio\\references\\acraze-do-it-to-it.spectrogram.png"
+}

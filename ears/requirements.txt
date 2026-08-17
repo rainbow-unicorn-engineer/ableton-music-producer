@@ -8,3 +8,8 @@ librosa>=0.10
 # Optional: reference LUFS meter (the built-in one is validated, but this
 # is the community standard)
 # pyloudnorm
+#
+# Reverse-engineering pipeline extras — both optional, both heavy, both
+# guarded (the tools explain what to install if they're missing):
+# demucs        # stem separation; ~1 GB model download on first run
+# basic-pitch   # polyphonic audio->MIDI (the fallback is monophonic)

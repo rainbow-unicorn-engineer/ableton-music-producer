@@ -1,0 +1,86 @@
+{
+  "name": "weekend-griz-flip",
+  "source_file": "C:\\Users\\gavin\\Downloads\\GRiZ - Weekend - Mac Miller (GRiZ flip).aiff",
+  "created": "2026-08-13 22:21",
+  "duration_s": 205.71,
+  "sample_rate": 44100,
+  "channels": 2,
+  "integrated_lufs": -5.99,
+  "true_peak_dbtp": 2.73,
+  "loudness_range_lu": 11.9,
+  "band_energy_db": {
+    "sub": -0.3,
+    "bass": 0.0,
+    "low-mid": -5.0,
+    "mid": -2.8,
+    "high-mid": -7.4,
+    "high": -9.4
+  },
+  "meter": "built-in BS.1770",
+  "key": "G minor",
+  "bpm": 143.6,
+  "structure": {
+    "skeleton": "intro 8 \u2192 drop 20 \u2192 section 5 \u2192 drop 44 \u2192 section 5 \u2192 drop 8 \u2192 drop 23 \u2192 outro 10",
+    "total_bars": 123,
+    "sections": [
+      {
+        "label": "intro",
+        "start_bar": 0,
+        "length_bars": 8,
+        "avg_energy_db": -17.7,
+        "sub_presence": 0.12
+      },
+      {
+        "label": "drop",
+        "start_bar": 8,
+        "length_bars": 20,
+        "avg_energy_db": -4.5,
+        "sub_presence": 0.53
+      },
+      {
+        "label": "section",
+        "start_bar": 28,
+        "length_bars": 5,
+        "avg_energy_db": -5.2,
+        "sub_presence": 0.14
+      },
+      {
+        "label": "drop",
+        "start_bar": 33,
+        "length_bars": 44,
+        "avg_energy_db": -3.0,
+        "sub_presence": 0.53
+      },
+      {
+        "label": "section",
+        "start_bar": 77,
+        "length_bars": 5,
+        "avg_energy_db": -4.5,
+        "sub_presence": 0.12
+      },
+      {
+        "label": "drop",
+        "start_bar": 82,
+        "length_bars": 8,
+        "avg_energy_db": -3.4,
+        "sub_presence": 0.33
+      },
+      {
+        "label": "drop",
+        "start_bar": 90,
+        "length_bars": 23,
+        "avg_energy_db": -2.8,
+        "sub_presence": 0.56
+      },
+      {
+        "label": "outro",
+        "start_bar": 113,
+        "length_bars": 10,
+        "avg_energy_db": -15.6,
+        "sub_presence": 0.01
+      }
+    ]
+  },
+  "structure_png": "C:\\Users\\gavin\\PycharmProjects\\xlnt-studio\\references\\GRiZ - Weekend - Mac Miller (GRiZ flip).structure.png",
+  "spectrogram_png": "C:\\Users\\gavin\\PycharmProjects\\xlnt-studio\\references\\weekend-griz-flip.spectrogram.png"
+}

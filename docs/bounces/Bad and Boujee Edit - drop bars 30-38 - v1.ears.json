@@ -1,0 +1,20 @@
+{
+  "file": "C:\\Music Production\\Bounces\\Bad and Boujee Edit - drop bars 30-38 - v1.wav",
+  "duration_s": 71.82,
+  "sample_rate": 48000,
+  "channels": 2,
+  "integrated_lufs": -16.78,
+  "true_peak_dbtp": -1.63,
+  "loudness_range_lu": 6.9,
+  "band_energy_db": {
+    "sub": -1.6,
+    "bass": 0.0,
+    "low-mid": -1.3,
+    "mid": -0.1,
+    "high-mid": -5.1,
+    "high": -6.6
+  },
+  "meter": "built-in BS.1770",
+  "summary": "Bad and Boujee Edit - drop bars 30-38 - v1.wav: -16.78 LUFS integrated, true peak -1.63 dBTP, loudness range 6.9 LU (71.82s, built-in BS.1770). Low-mids carry more energy than the sub \u2014 check for mud around 250\u2013500 Hz.",
+  "spectrogram_png": "C:\\Users\\gavin\\PycharmProjects\\xlnt-studio\\docs\\bounces\\Bad and Boujee Edit - drop bars 30-38 - v1.spectrogram.png"
+}

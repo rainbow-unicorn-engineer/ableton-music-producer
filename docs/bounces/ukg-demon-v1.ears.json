@@ -1,0 +1,20 @@
+{
+  "file": "C:\\Music Production\\Bounces\\ukg-demon-v1.wav",
+  "duration_s": 6.96,
+  "sample_rate": 44100,
+  "channels": 2,
+  "integrated_lufs": -10.89,
+  "true_peak_dbtp": 0.03,
+  "loudness_range_lu": 7.2,
+  "band_energy_db": {
+    "sub": 0.0,
+    "bass": -3.4,
+    "low-mid": -11.0,
+    "mid": -9.8,
+    "high-mid": -14.6,
+    "high": -19.8
+  },
+  "meter": "built-in BS.1770",
+  "summary": "ukg-demon-v1.wav: -10.89 LUFS integrated, true peak 0.03 dBTP, loudness range 7.2 LU (6.96s, built-in BS.1770). \u26a0\ufe0f True peak is basically at the ceiling \u2014 lossy encoders WILL clip this. Trim the limiter output.",
+  "spectrogram_png": "C:\\Users\\gavin\\PycharmProjects\\xlnt-studio\\docs\\bounces\\ukg-demon-v1.spectrogram.png"
+}

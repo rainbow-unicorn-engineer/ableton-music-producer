@@ -2177,6 +2177,108 @@ def navigate_device_preset(
 
 
 # Main execution
+@mcp.tool()
+def get_clip_notes(
+    ctx: Context,
+    track_index: int,
+    clip_index: int = 1,
+    arrangement: bool = False,
+) -> str:
+    """Read the MIDI notes inside a clip — the missing half of copy/paste.
+
+    Parameters:
+    - track_index: Track number (1-based).
+    - clip_index: Session slot OR arrangement clip position (1-based).
+    - arrangement: True to read an arrangement clip, False for session.
+
+    Returns JSON with clip_name, length (beats) and notes
+    [{pitch, start_time, duration, velocity, mute}, ...] — exactly the
+    format add_notes_to_clip / add_notes_to_arrangement_clip accept, so
+    read → create clip elsewhere → write is a full programmatic copy.
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_clip_notes", {
+            "track_index": _to_zero_based(track_index, "track_index"),
+            "clip_index": _to_zero_based(clip_index, "clip_index"),
+            "arrangement": arrangement,
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error getting clip notes: {str(e)}"
+
+
+@mcp.tool()
+def get_master_devices(ctx: Context) -> str:
+    """List the devices on the Master/Main track (1-based indices in the
+    reply are ready for the other master tools)."""
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_master_devices")
+        devices = result.get("devices", [])
+        lines = ["=== Master Track Devices ==="]
+        for d in devices:
+            lines.append(f"  {d['index'] + 1}. {d['name']} ({d['class_name']})")
+        return "\n".join(lines) if devices else "No devices on the master track."
+    except Exception as e:
+        return f"Error getting master devices: {str(e)}"
+
+
+@mcp.tool()
+def get_master_device_parameters(
+    ctx: Context,
+    device_index: int = 1,
+) -> str:
+    """Full parameter list for a device on the Master/Main track.
+
+    Parameters:
+    - device_index: Device number on the master track (1-based).
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_master_device_parameters", {
+            "device_index": _to_zero_based(device_index, "device_index"),
+            "show_all": True,
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error getting master device parameters: {str(e)}"
+
+
+@mcp.tool()
+def set_master_device_parameter(
+    ctx: Context,
+    device_index: int = 1,
+    parameter_name: str = "",
+    parameter_index: int = 0,
+    value: float = 0.0,
+) -> str:
+    """Set a parameter on a Master/Main-track device (e.g. the limiter
+    ceiling). Value is normalized 0.0-1.0; read back display_value to
+    verify the real-world units.
+
+    Parameters:
+    - device_index: Device number on the master track (1-based).
+    - parameter_name: Name or partial match (alternative to index).
+    - parameter_index: Parameter number (1-based, alternative to name).
+    - value: Normalized value 0.0-1.0.
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_master_device_parameter", {
+            "device_index": _to_zero_based(device_index, "device_index"),
+            "parameter_name": parameter_name or None,
+            "parameter_index": (_to_zero_based(parameter_index, "parameter_index")
+                                if parameter_index else None),
+            "value": value,
+        })
+        return (f"Set {result.get('parameter')} to "
+                f"{result.get('display_value')} "
+                f"(normalized {result.get('normalized')})")
+    except Exception as e:
+        return f"Error setting master device parameter: {str(e)}"
+
+
 def main():
     """Run the MCP server"""
     mcp.run()
