@@ -2,6 +2,7 @@
 from mcp.server.fastmcp import FastMCP, Context
 import socket
 import json
+import math
 import logging
 import re
 import threading
@@ -116,6 +117,7 @@ class AbletonConnection:
             "set_arrangement_clip_property",
             "set_view", "control_arrangement_view",
             "manage_clip_automation",
+            "write_automation",
             "add_notes_to_arrangement_clip",
             "set_device_parameter", "set_device_enabled",
             "delete_device", "navigate_preset",
@@ -1683,6 +1685,249 @@ def manage_clip_automation(
         return f"Error managing clip automation: {str(e)}"
 
 
+
+# ── Automation Writing ────────────────────────────────────────────
+# → "Automation" = a parameter that moves on its own over time: a filter
+#   opening across a build, a synth fading in, a reverb send swelling.
+#   Static tracks sound amateur; movement is most of what "produced"
+#   means. These tools draw those moves so no knob has to be recorded
+#   by hand.
+
+def _find_clip_covering(track_index: int, bar: float) -> int:
+    """Return the 1-based arrangement clip index that sounds at `bar`."""
+    ableton = get_ableton_connection()
+    idx = _to_zero_based(track_index, "track_index")
+    info = ableton.send_command("get_arrangement_info", {"track_index": idx})
+    num, denom = _get_time_signature()
+    beat = bar_to_beat(int(bar), num, denom) + (bar - int(bar)) * num
+    tracks = info.get("tracks", [])
+    if not tracks:
+        raise ValueError(f"Track {track_index} has no arrangement data")
+    clips = tracks[0].get("arrangement_clips", [])
+    for i, c in enumerate(clips):
+        if c.get("start_time", 0) <= beat < c.get("end_time", 0):
+            return i + 1
+    spans = ", ".join(
+        f"{beat_to_bar(c.get('start_time', 0), num, denom)}-"
+        f"{beat_to_bar(c.get('end_time', 0), num, denom)}" for c in clips) or "none"
+    raise ValueError(
+        f"No clip on track {track_index} covers bar {bar}. Clips there: {spans}. "
+        "Automation lives inside a clip, so there must be one at that bar.")
+
+
+def _hz_to_normalized(hz: float) -> float:
+    """Live's built-in filter/EQ frequency scale: 0..1, logarithmic.
+
+    → Ableton doesn't accept "800 Hz" directly; its frequency knobs run
+      0 to 1 on a log curve. 100 Hz = 0.30, 1 kHz = 0.60, 10 kHz = 0.90.
+    """
+    hz = max(20.0, min(22000.0, float(hz)))
+    return max(0.0, min(1.0, 0.3 + (math.log10(hz) - 2.0) * 0.3))
+
+
+def _automation_call(**kw) -> dict:
+    ableton = get_ableton_connection()
+    return ableton.send_command("write_automation", kw)
+
+
+def _describe_automation(result: dict, what: str) -> str:
+    return (f"{what} written on '{result.get('track')}' → "
+            f"{result.get('parameter')} | {result.get('breakpoints')} points | "
+            f"{result.get('first', {}).get('value'):.4f} → "
+            f"{result.get('last', {}).get('value'):.4f} "
+            f"(param range {result.get('range', {}).get('min')}–"
+            f"{result.get('range', {}).get('max')}) | shape: {result.get('shape')}")
+
+
+@mcp.tool()
+def list_automatable_parameters(
+    ctx: Context,
+    track_index: int,
+    filter: str = "",
+) -> str:
+    """List every parameter on a track that automation can move, with the
+    numeric range each accepts. Run this BEFORE write_automation so the
+    parameter name and value range are exact.
+
+    Parameters:
+    - track_index: Track number (1-based).
+    - filter: Only show parameters whose name contains this text
+      (e.g. "freq", "volume", "dry").
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("list_automatable_parameters", {
+            "track_index": _to_zero_based(track_index, "track_index"),
+            "filter": filter,
+        })
+        lines = [f"=== Automatable parameters on '{result.get('track')}' "
+                 f"({result.get('count')}) ==="]
+        for p in result.get("parameters", []):
+            dev = f"[dev {p['device_index']}] " if p.get("device_index") else ""
+            lines.append(f"{dev}{p['owner']}: {p['name']} = {p['value']:.4f} "
+                         f"(range {p['min']}–{p['max']})")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error listing automatable parameters: {str(e)}"
+
+
+@mcp.tool()
+def write_automation(
+    ctx: Context,
+    track_index: int,
+    parameter_name: str,
+    start_bar: float,
+    end_bar: float,
+    from_value: float,
+    to_value: float,
+    shape: str = "linear",
+    device_index: int = 0,
+    clip_index: int = 0,
+    value_mode: str = "raw",
+    resolution: float = 0.25,
+    curve: float = 2.0,
+    cycles: float = 1.0,
+    clear_first: bool = False,
+) -> str:
+    """Draw an automation curve — a parameter that moves over time.
+
+    Automation in the Arrangement lives inside a clip, so there must be a
+    clip on that track covering start_bar; the right clip is found
+    automatically unless clip_index is given.
+
+    Parameters:
+    - track_index: Track number (1-based).
+    - parameter_name: Exact name from list_automatable_parameters
+      ("Volume", "Frequency", "Dry/Wet", "Send A"...).
+    - start_bar / end_bar: Bar the move starts and finishes (1-based;
+      fractions allowed, e.g. 54.5 = halfway through bar 54).
+    - from_value / to_value: Values at each end, in the parameter's own
+      units unless value_mode="normalized" (then 0.0–1.0).
+    - shape: "linear" (steady), "exp" (slow then rushing — best for
+      builds), "log" (fast then easing — best for drops), "s" (eased both
+      ends), "sine" or "triangle" (oscillates back and forth `cycles`
+      times — wobbles and tremolo).
+    - device_index: Restrict to one device on the track (1-based;
+      0 = search all).
+    - clip_index: Force a specific clip (1-based; 0 = auto-find).
+    - value_mode: "raw" (parameter's own units) or "normalized" (0–1).
+    - resolution: Beats between points. 0.25 = 16th notes (smooth).
+      Lower = smoother and slower to write.
+    - curve: Steepness for "exp"/"log" (2 = gentle, 5 = dramatic).
+    - cycles: Oscillations for "sine"/"triangle".
+    - clear_first: Wipe any existing automation for this parameter first.
+    """
+    try:
+        ci = clip_index or _find_clip_covering(track_index, start_bar)
+        num, denom = _get_time_signature()
+
+        def beat_of(bar: float) -> float:
+            return bar_to_beat(int(bar), num, denom) + (bar - int(bar)) * num
+
+        result = _automation_call(
+            track_index=_to_zero_based(track_index, "track_index"),
+            clip_index=_to_zero_based(ci, "clip_index"),
+            parameter_name=parameter_name,
+            device_index=device_index or None,
+            shape=shape,
+            start_beat=beat_of(start_bar),
+            end_beat=beat_of(end_bar),
+            from_value=from_value,
+            to_value=to_value,
+            resolution=resolution,
+            value_mode=value_mode,
+            curve=curve,
+            cycles=cycles,
+            clear_first=clear_first,
+        )
+        return _describe_automation(result, f"Automation bars {start_bar}–{end_bar}")
+    except Exception as e:
+        logger.error(f"Error writing automation: {str(e)}")
+        return f"Error writing automation: {str(e)}"
+
+
+@mcp.tool()
+def filter_sweep(
+    ctx: Context,
+    track_index: int,
+    start_bar: float,
+    end_bar: float,
+    from_hz: float,
+    to_hz: float,
+    parameter_name: str = "Frequency",
+    device_index: int = 0,
+    shape: str = "exp",
+    clip_index: int = 0,
+    resolution: float = 0.25,
+    clear_first: bool = True,
+) -> str:
+    """Sweep a filter's cutoff between two frequencies over a range of bars.
+
+    → A "filter sweep" is the sound of a track being progressively muffled
+      or un-muffled. Opening one across a build is the single most common
+      way to create tension; closing one is how a section gets pulled away.
+
+    Frequencies are given in Hz and converted to Live's 0–1 log scale.
+    Works with Auto Filter, EQ Eight and Live's other built-in filters.
+
+    Parameters:
+    - track_index: Track number (1-based).
+    - start_bar / end_bar: Where the sweep runs (1-based, fractions OK).
+    - from_hz / to_hz: Cutoff at each end (e.g. 200 → 12000 to open up).
+    - parameter_name: Which knob (default "Frequency"; EQ Eight bands are
+      "Frequency A".."Frequency H").
+    - device_index: Restrict to one device on the track (1-based).
+    - shape: "exp" (holds low, opens late — classic build), "linear",
+      "log" (opens fast then eases), "s" (eased both ends).
+    - clip_index: Force a specific clip (1-based; 0 = auto-find).
+    - clear_first: Wipe existing automation for that knob first (default on).
+    """
+    return write_automation(
+        ctx, track_index, parameter_name, start_bar, end_bar,
+        from_value=_hz_to_normalized(from_hz),
+        to_value=_hz_to_normalized(to_hz),
+        shape=shape, device_index=device_index, clip_index=clip_index,
+        value_mode="normalized", resolution=resolution,
+        clear_first=clear_first,
+    )
+
+
+@mcp.tool()
+def volume_ride(
+    ctx: Context,
+    track_index: int,
+    start_bar: float,
+    end_bar: float,
+    from_level: float = 0.0,
+    to_level: float = 0.85,
+    shape: str = "s",
+    clip_index: int = 0,
+    resolution: float = 0.25,
+    clear_first: bool = True,
+) -> str:
+    """Fade a track's level up or down across a range of bars.
+
+    → A "volume ride" is a hand-drawn fade: a pad swelling into a drop, a
+      bass ducking out for one bar, an element easing in instead of
+      appearing abruptly. On Live's fader **0.85 = 0 dB (unity)** and 0.0
+      is silence.
+
+    Parameters:
+    - track_index: Track number (1-based).
+    - start_bar / end_bar: Where the fade runs (1-based, fractions OK).
+    - from_level / to_level: Fader positions, 0.0–1.0 (0.85 = 0 dB).
+    - shape: "s" (eased — sounds natural), "linear", "exp" (stays quiet
+      then rushes in), "log" (jumps up then eases).
+    - clip_index: Force a specific clip (1-based; 0 = auto-find).
+    - clear_first: Wipe existing volume automation first (default on).
+    """
+    return write_automation(
+        ctx, track_index, "Volume", start_bar, end_bar,
+        from_value=from_level, to_value=to_level, shape=shape,
+        clip_index=clip_index, value_mode="raw", resolution=resolution,
+        clear_first=clear_first,
+    )
+
 # ── Device / Parameter Tools ──────────────────────────────────────
 
 @mcp.tool()
@@ -2484,6 +2729,100 @@ def arrangement_doctor(
     except Exception as e:
         logger.error(f"Error running arrangement doctor: {str(e)}")
         return f"Error running arrangement doctor: {str(e)}"
+
+
+@mcp.tool()
+def set_track_mute(ctx: Context, track_index: int, muted: bool = True) -> str:
+    """Mute or unmute a track at the mixer.
+
+    Parameters:
+    - track_index: Track number (1-based). Return tracks continue the numbering.
+    - muted: True to mute, False to unmute.
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_track_mute", {
+            "track_index": _to_zero_based(track_index, "track_index"),
+            "muted": muted,
+        })
+        state = "muted" if result.get("muted") else "unmuted"
+        return f"'{result.get('track')}' is now {state}."
+    except Exception as e:
+        return f"Error setting track mute: {str(e)}"
+
+
+@mcp.tool()
+def set_track_solo(ctx: Context, track_index: int, soloed: bool = True) -> str:
+    """Solo or unsolo a track — the audition workhorse for A/B-ing sounds.
+
+    Parameters:
+    - track_index: Track number (1-based).
+    - soloed: True to solo, False to clear.
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_track_solo", {
+            "track_index": _to_zero_based(track_index, "track_index"),
+            "soloed": soloed,
+        })
+        state = "soloed" if result.get("soloed") else "unsoloed"
+        return f"'{result.get('track')}' is now {state}."
+    except Exception as e:
+        return f"Error setting track solo: {str(e)}"
+
+
+@mcp.tool()
+def get_track_sends(ctx: Context, track_index: int) -> str:
+    """List a track's send levels — one per return track (A ROOM, B DELAY...).
+    Sends are how a mix gets DEPTH: dry signal up front, sent signal further
+    back in the room.
+
+    Parameters:
+    - track_index: Track number (1-based).
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_track_sends", {
+            "track_index": _to_zero_based(track_index, "track_index"),
+        })
+        sends = result.get("sends", [])
+        if not sends:
+            return f"'{result.get('track')}' has no sends (no return tracks?)."
+        lines = [f"=== Sends on '{result.get('track')}' ==="]
+        for s in sends:
+            lines.append(f"  {s['index'] + 1}. {s['name']}: "
+                         f"{s['display_value']} (normalized {s['value']})")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error getting track sends: {str(e)}"
+
+
+@mcp.tool()
+def set_track_send(
+    ctx: Context,
+    track_index: int,
+    send_index: int = 1,
+    value: float = 0.0,
+) -> str:
+    """Set how much of a track is sent to a return (reverb/delay) — the
+    control that creates depth and distance in a mix.
+
+    Parameters:
+    - track_index: Track number (1-based).
+    - send_index: Which send (1-based; 1 = first return track, e.g. A ROOM).
+    - value: Normalized 0.0-1.0. Subtle depth ~0.15-0.3; obvious ~0.4+.
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_track_send", {
+            "track_index": _to_zero_based(track_index, "track_index"),
+            "send_index": _to_zero_based(send_index, "send_index"),
+            "value": value,
+        })
+        return (f"'{result.get('track')}' send {send_index} -> "
+                f"{result.get('display_value')}")
+    except Exception as e:
+        return f"Error setting track send: {str(e)}"
 
 
 def main():

@@ -345,6 +345,7 @@ class AbletonMCP(ControlSurface):
                                  "set_arrangement_clip_property",
                                  "set_view", "control_arrangement_view",
                                  "manage_clip_automation",
+                                 "write_automation",
                                  "add_notes_to_arrangement_clip",
                                  "set_device_parameter", "set_device_enabled",
                                  "delete_device", "navigate_preset",
@@ -352,7 +353,9 @@ class AbletonMCP(ControlSurface):
                                  "set_track_volume", "set_track_panning",
                                  "set_master_device_parameter",
                                  "create_arrangement_audio_clip_ex",
-                                 "trim_arrangement_clip"]:
+                                 "trim_arrangement_clip",
+                                 "set_track_mute", "set_track_solo",
+                                 "set_track_send"]:
                 # Use a thread-safe approach with a response queue
                 response_queue = queue.Queue()
                 
@@ -457,6 +460,8 @@ class AbletonMCP(ControlSurface):
                             action = params.get("action", "")
                             ti = params.get("track_index", 0)
                             result = self._control_arrangement_view(action, ti)
+                        elif command_type == "write_automation":
+                            result = self._write_automation(params)
                         elif command_type == "manage_clip_automation":
                             ti = params.get("track_index", 0)
                             ci = params.get("clip_index", 0)
@@ -494,6 +499,19 @@ class AbletonMCP(ControlSurface):
                             ci = params.get("clip_index", 0)
                             eb = params.get("end_beats", 0.0)
                             result = self._trim_arrangement_clip(ti, ci, eb)
+                        elif command_type == "set_track_mute":
+                            result = self._set_track_mute(
+                                params.get("track_index", 0),
+                                params.get("muted", False))
+                        elif command_type == "set_track_solo":
+                            result = self._set_track_solo(
+                                params.get("track_index", 0),
+                                params.get("soloed", False))
+                        elif command_type == "set_track_send":
+                            result = self._set_track_send(
+                                params.get("track_index", 0),
+                                params.get("send_index", 0),
+                                params.get("value", 0.0))
                         elif command_type == "set_device_enabled":
                             ti = params.get("track_index", 0)
                             di = params.get("device_index", 0)
@@ -589,6 +607,9 @@ class AbletonMCP(ControlSurface):
                 ti = params.get("track_index", 0)
                 di = params.get("device_index", 0)
                 response["result"] = self._get_drum_pad_info(ti, di)
+            elif command_type == "list_automatable_parameters":
+                response["result"] = self._list_automatable_parameters(
+                    params.get("track_index", 0), params.get("filter", ""))
             elif command_type == "get_arrangement_clip_details":
                 ti = params.get("track_index", 0)
                 ci = params.get("clip_index", 0)
@@ -598,6 +619,9 @@ class AbletonMCP(ControlSurface):
                 ci = params.get("clip_index", 0)
                 arrangement = params.get("arrangement", False)
                 response["result"] = self._get_clip_notes(ti, ci, arrangement)
+            elif command_type == "get_track_sends":
+                response["result"] = self._get_track_sends(
+                    params.get("track_index", 0))
             elif command_type == "get_master_devices":
                 response["result"] = self._get_master_devices()
             elif command_type == "get_master_device_parameters":
@@ -1616,6 +1640,73 @@ class AbletonMCP(ControlSurface):
             self.log_message("Error creating audio clip ex: " + str(e))
             raise
 
+    def _resolve_any_track(self, track_index):
+        """Regular tracks by index; return tracks continue the numbering."""
+        n = len(self._song.tracks)
+        if 0 <= track_index < n:
+            return self._song.tracks[track_index]
+        r = track_index - n
+        if 0 <= r < len(self._song.return_tracks):
+            return self._song.return_tracks[r]
+        raise IndexError("Track index {0} out of range".format(track_index))
+
+    def _set_track_mute(self, track_index, muted):
+        """Mute/unmute a track at the mixer."""
+        try:
+            track = self._resolve_any_track(track_index)
+            track.mute = bool(muted)
+            return {"track": track.name, "muted": bool(track.mute)}
+        except Exception as e:
+            self.log_message("Error setting track mute: " + str(e))
+            raise
+
+    def _set_track_solo(self, track_index, soloed):
+        """Solo/unsolo a track — the audition workhorse."""
+        try:
+            track = self._resolve_any_track(track_index)
+            track.solo = bool(soloed)
+            return {"track": track.name, "soloed": bool(track.solo)}
+        except Exception as e:
+            self.log_message("Error setting track solo: " + str(e))
+            raise
+
+    def _get_track_sends(self, track_index):
+        """List a track's send levels, one per return track."""
+        try:
+            track = self._resolve_any_track(track_index)
+            sends = []
+            for i, s in enumerate(track.mixer_device.sends):
+                rng = (s.max - s.min) or 1.0
+                sends.append({
+                    "index": i,
+                    "name": (self._song.return_tracks[i].name
+                             if i < len(self._song.return_tracks) else str(i)),
+                    "value": round((s.value - s.min) / rng, 4),
+                    "display_value": str(s),
+                })
+            return {"track": track.name, "send_count": len(sends),
+                    "sends": sends}
+        except Exception as e:
+            self.log_message("Error getting track sends: " + str(e))
+            raise
+
+    def _set_track_send(self, track_index, send_index, value):
+        """Set one send level. value is normalized 0.0-1.0."""
+        try:
+            track = self._resolve_any_track(track_index)
+            sends = track.mixer_device.sends
+            if send_index < 0 or send_index >= len(sends):
+                raise IndexError("Send index {0} out of range (0-{1})".format(
+                    send_index, len(sends) - 1 if sends else 0))
+            send = sends[send_index]
+            clamped = max(0.0, min(1.0, value))
+            send.value = send.min + (send.max - send.min) * clamped
+            return {"track": track.name, "send_index": send_index,
+                    "display_value": str(send), "normalized": clamped}
+        except Exception as e:
+            self.log_message("Error setting track send: " + str(e))
+            raise
+
     def _trim_arrangement_clip(self, track_index, clip_index, end_beats):
         """Shorten an arrangement clip so it ends at end_beats (absolute).
 
@@ -1773,7 +1864,8 @@ class AbletonMCP(ControlSurface):
         """Set a property on an arrangement clip."""
         try:
             ALLOWED = ("name", "muted", "color", "looping", "loop_start", "loop_end",
-                       "gain", "pitch_coarse", "pitch_fine", "warping", "warp_mode")
+                       "gain", "pitch_coarse", "pitch_fine", "warping", "warp_mode",
+                       "start_marker", "end_marker")
             if property_name not in ALLOWED:
                 raise ValueError("Property '{0}' not allowed. Allowed: {1}".format(
                     property_name, ", ".join(ALLOWED)))
@@ -1824,6 +1916,186 @@ class AbletonMCP(ControlSurface):
         except Exception as e:
             self.log_message("Error controlling arrangement view: " + str(e))
             raise
+
+    # -- Automation writing -------------------------------------------
+
+    def _find_automatable_parameter(self, track, parameter_name, device_index=None):
+        """Find a parameter by name on a track: mixer, then sends, then devices.
+
+        device_index (1-based, as the user sees it) narrows the search to one
+        device, which matters when two plugins share a parameter name.
+        """
+        want = (parameter_name or "").strip().lower()
+        mixer = track.mixer_device
+        for p in (mixer.volume, mixer.panning):
+            if p.name.lower() == want:
+                return p
+        try:
+            for send in mixer.sends:
+                if send.name.lower() == want:
+                    return send
+        except Exception:
+            pass
+        devices = list(track.devices)
+        if device_index is not None:
+            di = int(device_index) - 1
+            if di < 0 or di >= len(devices):
+                raise IndexError("Device index out of range")
+            devices = [devices[di]]
+        for exact in (True, False):
+            for device in devices:
+                for p in device.parameters:
+                    nm = p.name.lower()
+                    if (nm == want) if exact else (want in nm):
+                        return p
+        raise ValueError("Parameter '{0}' not found on track '{1}'".format(
+            parameter_name, track.name))
+
+    def _list_automatable_parameters(self, track_index, name_filter=""):
+        """Every parameter that can be automated on a track, with its range."""
+        track = self._resolve_any_track(track_index)
+        flt = (name_filter or "").strip().lower()
+        out = []
+
+        def add(owner, p, device_index=None):
+            if flt and flt not in p.name.lower():
+                return
+            try:
+                out.append({
+                    "owner": owner,
+                    "device_index": device_index,
+                    "name": p.name,
+                    "value": p.value,
+                    "min": p.min,
+                    "max": p.max,
+                })
+            except Exception:
+                pass
+
+        mixer = track.mixer_device
+        add("mixer", mixer.volume)
+        add("mixer", mixer.panning)
+        try:
+            for send in mixer.sends:
+                add("send", send)
+        except Exception:
+            pass
+        for i, device in enumerate(track.devices):
+            for p in device.parameters:
+                add(device.name, p, i + 1)
+        return {"track": track.name, "count": len(out), "parameters": out}
+
+    def _shape_value(self, shape, u, curve, cycles):
+        """Map a 0..1 position through a curve shape, returning 0..1."""
+        import math
+        if shape == "exp":
+            return u ** max(0.01, curve)
+        if shape == "log":
+            return u ** (1.0 / max(0.01, curve))
+        if shape == "s":
+            return u * u * (3.0 - 2.0 * u)
+        if shape == "sine":
+            return 0.5 - 0.5 * math.cos(2.0 * math.pi * cycles * u)
+        if shape == "triangle":
+            x = (cycles * u) % 1.0
+            return 2.0 * x if x < 0.5 else 2.0 * (1.0 - x)
+        return u
+
+    def _write_automation(self, params):
+        """Draw an automation curve into an arrangement clip's envelope.
+
+        Times arrive as ABSOLUTE beats (bar 1 = beat 0). Envelopes are
+        clip-relative, so the clip's own start time is subtracted here.
+        """
+        track_index = params.get("track_index", 0)
+        clip_index = params.get("clip_index", None)
+        clip_name = params.get("clip_name", None)
+        parameter_name = params.get("parameter_name", "volume")
+        device_index = params.get("device_index", None)
+        shape = params.get("shape", "linear")
+        start_beat = params.get("start_beat", None)
+        end_beat = params.get("end_beat", None)
+        from_value = params.get("from_value", None)
+        to_value = params.get("to_value", None)
+        resolution = float(params.get("resolution", 0.25))
+        points = params.get("points", None)
+        value_mode = params.get("value_mode", "raw")
+        curve = float(params.get("curve", 2.0))
+        cycles = float(params.get("cycles", 1.0))
+        clear_first = bool(params.get("clear_first", False))
+
+        track, clip = self._resolve_arrangement_clip(track_index, clip_index, clip_name)
+        param = self._find_automatable_parameter(track, parameter_name, device_index)
+
+        try:
+            env = clip.automation_envelope(param)
+        except Exception:
+            env = None
+        if env is None:
+            clip.create_automation_envelope(param)
+            env = clip.automation_envelope(param)
+        if env is None:
+            raise RuntimeError("Could not create an envelope for " + param.name)
+        if clear_first:
+            try:
+                clip.clear_envelope(param)
+            except Exception:
+                pass
+            env = clip.automation_envelope(param)
+
+        pmin, pmax = param.min, param.max
+
+        def to_raw(v):
+            if value_mode == "normalized":
+                return pmin + float(v) * (pmax - pmin)
+            return float(v)
+
+        def clamp(v):
+            return max(pmin, min(pmax, v))
+
+        clip_start = clip.start_time
+        clip_len = clip.end_time - clip.start_time
+
+        def rel(b):
+            return max(0.0, min(clip_len, float(b) - clip_start))
+
+        written = []
+        if points:
+            for pt in points:
+                t = rel(pt[0])
+                v = clamp(to_raw(pt[1]))
+                env.insert_step(t, 0.0, v)
+                written.append((t, v))
+        else:
+            if start_beat is None or end_beat is None:
+                raise ValueError("start_beat and end_beat are required")
+            a = clamp(to_raw(from_value))
+            b = clamp(to_raw(to_value))
+            t0, t1 = rel(start_beat), rel(end_beat)
+            span = t1 - t0
+            if span <= 0:
+                raise ValueError(
+                    "That range does not overlap this clip (clip covers "
+                    "beats {0}-{1})".format(clip_start, clip.end_time))
+            steps = max(2, int(round(span / max(0.03125, resolution))) + 1)
+            for i in range(steps):
+                u = float(i) / (steps - 1)
+                v = clamp(a + (b - a) * self._shape_value(shape, u, curve, cycles))
+                t = t0 + span * u
+                env.insert_step(t, 0.0, v)
+                written.append((t, v))
+
+        return {
+            "track": track.name,
+            "clip": clip.name,
+            "parameter": param.name,
+            "shape": "points" if points else shape,
+            "breakpoints": len(written),
+            "first": {"beat_in_clip": written[0][0], "value": written[0][1]},
+            "last": {"beat_in_clip": written[-1][0], "value": written[-1][1]},
+            "range": {"min": pmin, "max": pmax},
+            "done": True,
+        }
 
     def _manage_clip_automation(self, track_index, clip_index, action, parameter_name=""):
         """Create or clear automation envelopes."""
