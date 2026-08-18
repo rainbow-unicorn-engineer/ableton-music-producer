@@ -118,6 +118,8 @@ class AbletonConnection:
             "set_view", "control_arrangement_view",
             "manage_clip_automation",
             "write_automation",
+            "record_automation",
+            "stop_automation_recording",
             "add_notes_to_arrangement_clip",
             "set_device_parameter", "set_device_enabled",
             "delete_device", "navigate_preset",
@@ -1686,12 +1688,18 @@ def manage_clip_automation(
 
 
 
-# ── Automation Writing ────────────────────────────────────────────
-# → "Automation" = a parameter that moves on its own over time: a filter
+# ── Automation ────────────────────────────────────────────────────
+# → "Automation" = a knob that moves on its own over time: a filter
 #   opening across a build, a synth fading in, a reverb send swelling.
 #   Static tracks sound amateur; movement is most of what "produced"
-#   means. These tools draw those moves so no knob has to be recorded
-#   by hand.
+#   means.
+#
+#   Live's API cannot write Arrangement automation directly - envelopes
+#   only exist on Session clips. So this does what a human does: puts
+#   Live in record, plays the section, and moves the knob. It just moves
+#   it perfectly, and can move a dozen knobs at once in one pass.
+#   That means an automation pass takes REAL TIME - an 8-bar move at
+#   124 BPM takes about 15 seconds of playback.
 
 def _find_clip_covering(track_index: int, bar: float) -> int:
     """Return the 1-based arrangement clip index that sounds at `bar`."""
@@ -1707,16 +1715,11 @@ def _find_clip_covering(track_index: int, bar: float) -> int:
     for i, c in enumerate(clips):
         if c.get("start_time", 0) <= beat < c.get("end_time", 0):
             return i + 1
-    spans = ", ".join(
-        f"{beat_to_bar(c.get('start_time', 0), num, denom)}-"
-        f"{beat_to_bar(c.get('end_time', 0), num, denom)}" for c in clips) or "none"
-    raise ValueError(
-        f"No clip on track {track_index} covers bar {bar}. Clips there: {spans}. "
-        "Automation lives inside a clip, so there must be one at that bar.")
+    raise ValueError(f"No clip on track {track_index} covers bar {bar}.")
 
 
 def _hz_to_normalized(hz: float) -> float:
-    """Live's built-in filter/EQ frequency scale: 0..1, logarithmic.
+    """Live's built-in filter/EQ frequency scale: 0-1, logarithmic.
 
     → Ableton doesn't accept "800 Hz" directly; its frequency knobs run
       0 to 1 on a log curve. 100 Hz = 0.30, 1 kHz = 0.60, 10 kHz = 0.90.
@@ -1725,18 +1728,22 @@ def _hz_to_normalized(hz: float) -> float:
     return max(0.0, min(1.0, 0.3 + (math.log10(hz) - 2.0) * 0.3))
 
 
-def _automation_call(**kw) -> dict:
+def _bar_beat(bar: float) -> float:
+    num, denom = _get_time_signature()
+    return bar_to_beat(int(bar), num, denom) + (bar - int(bar)) * num
+
+
+def _run_automation(moves: list, preroll_beats: float = 4.0) -> str:
     ableton = get_ableton_connection()
-    return ableton.send_command("write_automation", kw)
-
-
-def _describe_automation(result: dict, what: str) -> str:
-    return (f"{what} written on '{result.get('track')}' → "
-            f"{result.get('parameter')} | {result.get('breakpoints')} points | "
-            f"{result.get('first', {}).get('value'):.4f} → "
-            f"{result.get('last', {}).get('value'):.4f} "
-            f"(param range {result.get('range', {}).get('min')}–"
-            f"{result.get('range', {}).get('max')}) | shape: {result.get('shape')}")
+    result = ableton.send_command("record_automation", {
+        "moves": moves, "preroll_beats": preroll_beats})
+    lines = [f"Automation pass started - Live is playing and recording. "
+             f"Expect ~{result.get('expected_seconds')} seconds."]
+    for m in result.get("moves", []):
+        lines.append(f"  {m['track']} -> {m['parameter']}: "
+                     f"{m['from']:.3f} -> {m['to']:.3f} ({m['shape']})")
+    lines.append("Call automation_status when it should be finished.")
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -1746,7 +1753,7 @@ def list_automatable_parameters(
     filter: str = "",
 ) -> str:
     """List every parameter on a track that automation can move, with the
-    numeric range each accepts. Run this BEFORE write_automation so the
+    numeric range each accepts. Run this BEFORE writing automation so the
     parameter name and value range are exact.
 
     Parameters:
@@ -1765,7 +1772,7 @@ def list_automatable_parameters(
         for p in result.get("parameters", []):
             dev = f"[dev {p['device_index']}] " if p.get("device_index") else ""
             lines.append(f"{dev}{p['owner']}: {p['name']} = {p['value']:.4f} "
-                         f"(range {p['min']}–{p['max']})")
+                         f"(range {p['min']}-{p['max']})")
         return "\n".join(lines)
     except Exception as e:
         return f"Error listing automatable parameters: {str(e)}"
@@ -1782,68 +1789,113 @@ def write_automation(
     to_value: float,
     shape: str = "linear",
     device_index: int = 0,
-    clip_index: int = 0,
     value_mode: str = "raw",
-    resolution: float = 0.25,
     curve: float = 2.0,
     cycles: float = 1.0,
-    clear_first: bool = False,
+    preroll_bars: float = 1.0,
 ) -> str:
-    """Draw an automation curve — a parameter that moves over time.
+    """Record one automation move into the Arrangement.
 
-    Automation in the Arrangement lives inside a clip, so there must be a
-    clip on that track covering start_bar; the right clip is found
-    automatically unless clip_index is given.
+    Live plays the section while the knob is moved along the curve, so
+    this takes REAL TIME (8 bars at 124 BPM ~ 15 s). Returns immediately;
+    check automation_status. To move several knobs at once, use
+    automation_pass instead - one playback, many moves.
 
     Parameters:
     - track_index: Track number (1-based).
     - parameter_name: Exact name from list_automatable_parameters
-      ("Volume", "Frequency", "Dry/Wet", "Send A"...).
-    - start_bar / end_bar: Bar the move starts and finishes (1-based;
-      fractions allowed, e.g. 54.5 = halfway through bar 54).
+      ("Track Volume", "Frequency", "Dry/Wet", "Cycle Edit"...).
+    - start_bar / end_bar: Where the move runs (1-based; fractions OK).
     - from_value / to_value: Values at each end, in the parameter's own
-      units unless value_mode="normalized" (then 0.0–1.0).
-    - shape: "linear" (steady), "exp" (slow then rushing — best for
-      builds), "log" (fast then easing — best for drops), "s" (eased both
-      ends), "sine" or "triangle" (oscillates back and forth `cycles`
-      times — wobbles and tremolo).
-    - device_index: Restrict to one device on the track (1-based;
-      0 = search all).
-    - clip_index: Force a specific clip (1-based; 0 = auto-find).
-    - value_mode: "raw" (parameter's own units) or "normalized" (0–1).
-    - resolution: Beats between points. 0.25 = 16th notes (smooth).
-      Lower = smoother and slower to write.
-    - curve: Steepness for "exp"/"log" (2 = gentle, 5 = dramatic).
-    - cycles: Oscillations for "sine"/"triangle".
-    - clear_first: Wipe any existing automation for this parameter first.
+      units unless value_mode="normalized" (then 0.0-1.0).
+    - shape: "linear", "exp" (slow then rushing - builds), "log" (fast
+      then easing - drops), "s" (eased both ends), "sine"/"triangle"
+      (oscillates `cycles` times - wobbles and tremolo).
+    - device_index: Restrict to one device on the track (1-based).
+    - curve: Steepness for exp/log (2 = gentle, 5 = dramatic).
+    - cycles: Oscillations for sine/triangle.
+    - preroll_bars: Bars of run-up before recording starts.
     """
     try:
-        ci = clip_index or _find_clip_covering(track_index, start_bar)
-        num, denom = _get_time_signature()
-
-        def beat_of(bar: float) -> float:
-            return bar_to_beat(int(bar), num, denom) + (bar - int(bar)) * num
-
-        result = _automation_call(
-            track_index=_to_zero_based(track_index, "track_index"),
-            clip_index=_to_zero_based(ci, "clip_index"),
-            parameter_name=parameter_name,
-            device_index=device_index or None,
-            shape=shape,
-            start_beat=beat_of(start_bar),
-            end_beat=beat_of(end_bar),
-            from_value=from_value,
-            to_value=to_value,
-            resolution=resolution,
-            value_mode=value_mode,
-            curve=curve,
-            cycles=cycles,
-            clear_first=clear_first,
-        )
-        return _describe_automation(result, f"Automation bars {start_bar}–{end_bar}")
+        return _run_automation([{
+            "track_index": _to_zero_based(track_index, "track_index"),
+            "parameter_name": parameter_name,
+            "device_index": device_index or None,
+            "start_beat": _bar_beat(start_bar), "end_beat": _bar_beat(end_bar),
+            "from_value": from_value, "to_value": to_value,
+            "shape": shape, "value_mode": value_mode,
+            "curve": curve, "cycles": cycles,
+        }], preroll_beats=_bar_beat(1 + preroll_bars))
     except Exception as e:
         logger.error(f"Error writing automation: {str(e)}")
         return f"Error writing automation: {str(e)}"
+
+
+@mcp.tool()
+def automation_pass(ctx: Context, moves: str, preroll_bars: float = 1.0) -> str:
+    """Record MANY automation moves in a SINGLE playback pass - the
+    efficient way to automate a whole section.
+
+    Parameters:
+    - moves: JSON list. Each entry takes the same fields as
+      write_automation, in bars:
+      [{"track_index": 31, "parameter_name": "Track Volume",
+        "start_bar": 58, "end_bar": 62,
+        "from_value": 0.35, "to_value": 0.95, "shape": "exp"},
+       {"track_index": 53, "parameter_name": "Track Volume",
+        "start_bar": 54, "end_bar": 62,
+        "from_value": 0.85, "to_value": 0.45, "shape": "s"}]
+      Optional per move: device_index, value_mode ("raw"/"normalized"),
+      curve, cycles.
+    - preroll_bars: Bars of run-up before the earliest move.
+
+    Live plays from the earliest start_bar to the latest end_bar once,
+    recording every move. Takes real time. Check automation_status.
+    """
+    try:
+        parsed = json.loads(moves) if isinstance(moves, str) else moves
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        out = []
+        for m in parsed:
+            out.append({
+                "track_index": _to_zero_based(m["track_index"], "track_index"),
+                "parameter_name": m.get("parameter_name", "Track Volume"),
+                "device_index": m.get("device_index") or None,
+                "start_beat": _bar_beat(m["start_bar"]),
+                "end_beat": _bar_beat(m["end_bar"]),
+                "from_value": m["from_value"], "to_value": m["to_value"],
+                "shape": m.get("shape", "linear"),
+                "value_mode": m.get("value_mode", "raw"),
+                "curve": m.get("curve", 2.0), "cycles": m.get("cycles", 1.0),
+            })
+        return _run_automation(out, preroll_beats=_bar_beat(1 + preroll_bars))
+    except Exception as e:
+        logger.error(f"Error in automation pass: {str(e)}")
+        return f"Error in automation pass: {str(e)}"
+
+
+@mcp.tool()
+def automation_status(ctx: Context) -> str:
+    """Is the automation pass finished? Reports progress, how many points
+    were written per parameter, and any error."""
+    try:
+        ableton = get_ableton_connection()
+        r = ableton.send_command("automation_recording_status", {})
+        return json.dumps(r, indent=2)
+    except Exception as e:
+        return f"Error reading automation status: {str(e)}"
+
+
+@mcp.tool()
+def stop_automation(ctx: Context) -> str:
+    """Abort a running automation pass and take Live out of record."""
+    try:
+        ableton = get_ableton_connection()
+        return json.dumps(ableton.send_command("stop_automation_recording", {}),
+                          indent=2)
+    except Exception as e:
+        return f"Error stopping automation: {str(e)}"
 
 
 @mcp.tool()
@@ -1857,39 +1909,34 @@ def filter_sweep(
     parameter_name: str = "Frequency",
     device_index: int = 0,
     shape: str = "exp",
-    clip_index: int = 0,
-    resolution: float = 0.25,
-    clear_first: bool = True,
+    preroll_bars: float = 1.0,
 ) -> str:
     """Sweep a filter's cutoff between two frequencies over a range of bars.
 
-    → A "filter sweep" is the sound of a track being progressively muffled
-      or un-muffled. Opening one across a build is the single most common
-      way to create tension; closing one is how a section gets pulled away.
+    → A "filter sweep" is the sound of a track being progressively
+      muffled or un-muffled. Opening one across a build is the single
+      most common way to create tension; closing one is how a section
+      gets pulled away.
 
-    Frequencies are given in Hz and converted to Live's 0–1 log scale.
-    Works with Auto Filter, EQ Eight and Live's other built-in filters.
+    Frequencies go in as Hz and are converted to Live's 0-1 log scale.
+    Works with Auto Filter, EQ Eight and Live's other built-in filters
+    (EQ Eight bands are "1 Frequency A" .. "8 Frequency B").
 
     Parameters:
     - track_index: Track number (1-based).
     - start_bar / end_bar: Where the sweep runs (1-based, fractions OK).
-    - from_hz / to_hz: Cutoff at each end (e.g. 200 → 12000 to open up).
-    - parameter_name: Which knob (default "Frequency"; EQ Eight bands are
-      "Frequency A".."Frequency H").
+    - from_hz / to_hz: Cutoff at each end (e.g. 200 -> 12000 to open up).
+    - parameter_name: Which knob (default "Frequency").
     - device_index: Restrict to one device on the track (1-based).
-    - shape: "exp" (holds low, opens late — classic build), "linear",
+    - shape: "exp" (holds low, opens late - classic build), "linear",
       "log" (opens fast then eases), "s" (eased both ends).
-    - clip_index: Force a specific clip (1-based; 0 = auto-find).
-    - clear_first: Wipe existing automation for that knob first (default on).
     """
     return write_automation(
         ctx, track_index, parameter_name, start_bar, end_bar,
         from_value=_hz_to_normalized(from_hz),
         to_value=_hz_to_normalized(to_hz),
-        shape=shape, device_index=device_index, clip_index=clip_index,
-        value_mode="normalized", resolution=resolution,
-        clear_first=clear_first,
-    )
+        shape=shape, device_index=device_index,
+        value_mode="normalized", preroll_bars=preroll_bars)
 
 
 @mcp.tool()
@@ -1901,9 +1948,7 @@ def volume_ride(
     from_level: float = 0.0,
     to_level: float = 0.85,
     shape: str = "s",
-    clip_index: int = 0,
-    resolution: float = 0.25,
-    clear_first: bool = True,
+    preroll_bars: float = 1.0,
 ) -> str:
     """Fade a track's level up or down across a range of bars.
 
@@ -1915,18 +1960,15 @@ def volume_ride(
     Parameters:
     - track_index: Track number (1-based).
     - start_bar / end_bar: Where the fade runs (1-based, fractions OK).
-    - from_level / to_level: Fader positions, 0.0–1.0 (0.85 = 0 dB).
-    - shape: "s" (eased — sounds natural), "linear", "exp" (stays quiet
+    - from_level / to_level: Fader positions, 0.0-1.0 (0.85 = 0 dB).
+    - shape: "s" (eased - sounds natural), "linear", "exp" (stays quiet
       then rushes in), "log" (jumps up then eases).
-    - clip_index: Force a specific clip (1-based; 0 = auto-find).
-    - clear_first: Wipe existing volume automation first (default on).
     """
     return write_automation(
-        ctx, track_index, "Volume", start_bar, end_bar,
+        ctx, track_index, "Track Volume", start_bar, end_bar,
         from_value=from_level, to_value=to_level, shape=shape,
-        clip_index=clip_index, value_mode="raw", resolution=resolution,
-        clear_first=clear_first,
-    )
+        preroll_bars=preroll_bars)
+
 
 # ── Device / Parameter Tools ──────────────────────────────────────
 

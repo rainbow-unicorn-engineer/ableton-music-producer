@@ -31,30 +31,49 @@ mcp = FastMCP("XLNT-Library")
 
 
 @mcp.tool()
-def find_sounds(description: str = "", key: str = None,
-                bpm_min: float = None, bpm_max: float = None,
-                category: str = None, limit: int = 10) -> str:
-    """Search the sample library by natural description.
+def find_sounds(description: str = "", query: str = "", key: str = None,
+                bpm: float = None, bpm_min: float = None,
+                bpm_max: float = None, category: str = None,
+                exclude: str = "", limit: int = 10,
+                strict: bool = True) -> str:
+    """Search the sample library by description. THE tool for "find me a…".
+
+    Matches the words you type against every file name and folder in the
+    library (with synonyms — "riser" also finds files named "Uplifter",
+    "reverse" also finds "R"/"backwards"), and against the stored audio
+    features.
 
     Parameters:
-    - description: free text, e.g. "dark punchy bass one-shot". Understands
-      darkness/brightness, punch, loudness, one-shot vs loop, category
-      words (kick, bass, vocal...), key names ("near F minor"), and
-      matches leftover words against file names.
-    - key: e.g. "F minor" — matches that key plus musically neighboring
-      keys (relative major/minor, ±1 semitone), exact key ranked first.
-    - bpm_min / bpm_max: tempo range for loops.
-    - category: kick/snare/hat/clap/perc/bass/vocal/fx/texture/pad/...
-    - limit: max results.
+    - description (or query — same thing): free text, e.g.
+      "reverse cymbal swell", "dark punchy bass one-shot",
+      "vocal adlib skrrt". Understands darkness/brightness, punch,
+      loudness, one-shot vs loop, category words (kick, bass, vocal…),
+      key names ("near F minor") and a bare tempo number ("124").
+    - key: e.g. "D# minor" — HARD filter, but includes musically
+      neighbouring keys (relative major/minor, ±1 semitone), exact first.
+    - bpm: target tempo. Half and double time score too — a 62 BPM loop
+      sits perfectly in a 124 BPM track.
+    - bpm_min / bpm_max: hard tempo range instead.
+    - category: kick/snare/clap/hat/perc/bass/vocal/fx/texture/pad/…
+      Passing it here is a hard filter; a category word inside the
+      description is only a strong hint.
+    - exclude: comma-separated text to reject on (e.g. "drum kits,demo").
+    - strict: drop files matching none of your words (default true).
+      Set false to see feature-only guesses.
 
-    Returns JSON list, best match first, each with path, category, key,
-    bpm, duration, brightness, punch, loudness, match_score.
+    Returns JSON with `query_understood` (what the words were taken to
+    mean), `results` (each with `matched_terms` saying WHY it matched),
+    and a `warning` when nothing really matched — a search that finds
+    nothing says so instead of returning arbitrary rows.
     """
-    bpm_range = (bpm_min, bpm_max) if bpm_min is not None and bpm_max is not None else None
-    results = search_mod.find_sounds(description=description, key=key,
-                                     bpm_range=bpm_range, category=category,
-                                     limit=limit)
-    return json.dumps(results, indent=2)
+    text = description or query
+    bpm_range = ((bpm_min, bpm_max)
+                 if bpm_min is not None and bpm_max is not None else None)
+    excl = [e.strip() for e in exclude.split(",") if e.strip()]
+    report = search_mod.find_sounds_report(
+        description=text, key=key, bpm=bpm, bpm_range=bpm_range,
+        category=category, exclude=excl, limit=limit, strict=strict)
+    return json.dumps(report, indent=2)
 
 
 @mcp.tool()

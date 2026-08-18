@@ -346,6 +346,8 @@ class AbletonMCP(ControlSurface):
                                  "set_view", "control_arrangement_view",
                                  "manage_clip_automation",
                                  "write_automation",
+                                 "record_automation",
+                                 "stop_automation_recording",
                                  "add_notes_to_arrangement_clip",
                                  "set_device_parameter", "set_device_enabled",
                                  "delete_device", "navigate_preset",
@@ -462,6 +464,10 @@ class AbletonMCP(ControlSurface):
                             result = self._control_arrangement_view(action, ti)
                         elif command_type == "write_automation":
                             result = self._write_automation(params)
+                        elif command_type == "record_automation":
+                            result = self._record_automation(params)
+                        elif command_type == "stop_automation_recording":
+                            result = self._stop_automation_recording()
                         elif command_type == "manage_clip_automation":
                             ti = params.get("track_index", 0)
                             ci = params.get("clip_index", 0)
@@ -607,6 +613,8 @@ class AbletonMCP(ControlSurface):
                 ti = params.get("track_index", 0)
                 di = params.get("device_index", 0)
                 response["result"] = self._get_drum_pad_info(ti, di)
+            elif command_type == "automation_recording_status":
+                response["result"] = self._automation_recording_status()
             elif command_type == "list_automatable_parameters":
                 response["result"] = self._list_automatable_parameters(
                     params.get("track_index", 0), params.get("filter", ""))
@@ -1927,15 +1935,18 @@ class AbletonMCP(ControlSurface):
         """
         want = (parameter_name or "").strip().lower()
         mixer = track.mixer_device
-        for p in (mixer.volume, mixer.panning):
-            if p.name.lower() == want:
-                return p
+        mixer_params = [mixer.volume, mixer.panning]
         try:
-            for send in mixer.sends:
-                if send.name.lower() == want:
-                    return send
+            mixer_params.extend(list(mixer.sends))
         except Exception:
             pass
+        # Live calls the fader "Track Volume", not "Volume" - match loosely so
+        # the obvious name works.
+        for exact in (True, False):
+            for p in mixer_params:
+                nm = p.name.lower()
+                if (nm == want) if exact else (want in nm or nm in want):
+                    return p
         devices = list(track.devices)
         if device_index is not None:
             di = int(device_index) - 1
@@ -2000,6 +2011,198 @@ class AbletonMCP(ControlSurface):
             x = (cycles * u) % 1.0
             return 2.0 * x if x < 0.5 else 2.0 * (1.0 - x)
         return u
+
+    # -- Automation recording -----------------------------------------
+    #
+    # Live's API can only write envelopes on SESSION clips
+    # (clip.automation_envelope raises "Not a session clip" in the
+    # Arrangement). The way automation actually gets into an Arrangement
+    # is the way a human does it: put Live in record, play the section,
+    # and move the knob. That is what this does - it just moves the knob
+    # perfectly, and can move fifteen of them at once in a single pass.
+
+    def _autorec_finish(self):
+        st = getattr(self, "_autorec", None)
+        if not st:
+            return
+        try:
+            self._song.record_mode = 0
+        except Exception:
+            pass
+        try:
+            self._song.stop_playback()
+        except Exception:
+            pass
+        try:
+            if st.get("prev_count_in") is not None:
+                self._song.count_in_duration = st["prev_count_in"]
+        except Exception:
+            pass
+        try:
+            if st.get("prev_loop") is not None:
+                self._song.loop = st["prev_loop"]
+        except Exception:
+            pass
+        st["running"] = False
+        st["done"] = True
+
+    def _autorec_step(self):
+        st = getattr(self, "_autorec", None)
+        if not st or not st.get("running"):
+            return
+        try:
+            t = self._song.current_song_time
+            for mv in st["moves"]:
+                if t < mv["start"]:
+                    continue
+                u = (t - mv["start"]) / mv["span"]
+                if u > 1.0:
+                    u = 1.0
+                v = mv["a"] + (mv["b"] - mv["a"]) * self._shape_value(
+                    mv["shape"], u, mv["curve"], mv["cycles"])
+                v = max(mv["pmin"], min(mv["pmax"], v))
+                try:
+                    mv["param"].value = v
+                    mv["points"] += 1
+                except Exception:
+                    pass
+            st["progress"] = t
+            if t >= st["end"]:
+                self._autorec_finish()
+                return
+        except Exception as e:
+            st["error"] = str(e)
+            self._autorec_finish()
+            return
+        try:
+            self.schedule_message(1, self._autorec_step)
+        except Exception as e:
+            st["error"] = "scheduler stopped: " + str(e)
+            self._autorec_finish()
+
+    def _record_automation(self, params):
+        """Record one or many parameter moves into the Arrangement in a
+        single playback pass. Times are ABSOLUTE beats (bar 1 = beat 0)."""
+        st = getattr(self, "_autorec", None)
+        if st and st.get("running"):
+            raise RuntimeError("An automation pass is already running "
+                               "(at beat {0}).".format(st.get("progress")))
+
+        moves_in = params.get("moves", [])
+        if not moves_in:
+            raise ValueError("No moves given")
+
+        # Group tracks (and any non-armable track) raise on .arm - Live's
+        # error is "Main and Return Tracks have no 'Arm' state!". Reading it
+        # defensively is the difference between a check and a crash.
+        armed = []
+        for t in self._song.tracks:
+            try:
+                if t.arm:
+                    armed.append(t.name)
+            except Exception:
+                pass
+        if armed:
+            raise RuntimeError(
+                "Disarm these tracks first, or Live will record audio/MIDI "
+                "into them during the pass: " + ", ".join(armed))
+
+        preroll = float(params.get("preroll_beats", 4.0))
+        moves = []
+        for m in moves_in:
+            ti = m.get("track_index", 0)
+            if ti < 0 or ti >= len(self._song.tracks):
+                raise IndexError("Track index {0} out of range".format(ti))
+            track = self._song.tracks[ti]
+            param = self._find_automatable_parameter(
+                track, m.get("parameter_name", "volume"), m.get("device_index"))
+            pmin, pmax = param.min, param.max
+            mode = m.get("value_mode", "raw")
+
+            def conv(v):
+                v = float(v)
+                return pmin + v * (pmax - pmin) if mode == "normalized" else v
+
+            a, b = conv(m.get("from_value", 0.0)), conv(m.get("to_value", 0.0))
+            start, end = float(m["start_beat"]), float(m["end_beat"])
+            if end <= start:
+                raise ValueError("end_beat must be after start_beat")
+            moves.append({
+                "param": param, "track": track.name, "name": param.name,
+                "a": max(pmin, min(pmax, a)), "b": max(pmin, min(pmax, b)),
+                "pmin": pmin, "pmax": pmax,
+                "start": start, "end": end, "span": end - start,
+                "shape": m.get("shape", "linear"),
+                "curve": float(m.get("curve", 2.0)),
+                "cycles": float(m.get("cycles", 1.0)),
+                "points": 0,
+            })
+
+        start = min(mv["start"] for mv in moves)
+        end = max(mv["end"] for mv in moves)
+
+        prev_count_in = None
+        try:
+            prev_count_in = self._song.count_in_duration
+            self._song.count_in_duration = 0
+        except Exception:
+            pass
+
+        prev_loop = None
+        try:
+            prev_loop = self._song.loop
+            self._song.loop = False   # a loop mid-pass would replay the region
+        except Exception:
+            pass
+
+        try:
+            self._song.stop_playback()
+        except Exception:
+            pass
+        self._song.current_song_time = max(0.0, start - preroll)
+        self._song.record_mode = 1
+        self._song.start_playback()
+
+        self._autorec = {
+            "running": True, "done": False, "error": None,
+            "moves": moves, "start": start, "end": end,
+            "progress": self._song.current_song_time,
+            "prev_count_in": prev_count_in, "prev_loop": prev_loop,
+        }
+        self.schedule_message(1, self._autorec_step)
+
+        beats = (end - start) + preroll
+        seconds = beats * 60.0 / max(1.0, self._song.tempo)
+        return {
+            "started": True,
+            "moves": [{"track": mv["track"], "parameter": mv["name"],
+                       "from": mv["a"], "to": mv["b"], "shape": mv["shape"]}
+                      for mv in moves],
+            "from_beat": start, "to_beat": end,
+            "expected_seconds": round(seconds, 1),
+        }
+
+    def _automation_recording_status(self):
+        st = getattr(self, "_autorec", None)
+        if not st:
+            return {"running": False, "done": False,
+                    "message": "No automation pass has been run yet."}
+        return {
+            "running": bool(st.get("running")),
+            "done": bool(st.get("done")),
+            "error": st.get("error"),
+            "progress_beat": st.get("progress"),
+            "to_beat": st.get("end"),
+            "points_written": [{"track": mv["track"], "parameter": mv["name"],
+                                "points": mv["points"]} for mv in st["moves"]],
+        }
+
+    def _stop_automation_recording(self):
+        st = getattr(self, "_autorec", None)
+        if not st or not st.get("running"):
+            return {"stopped": False, "message": "Nothing was running."}
+        self._autorec_finish()
+        return {"stopped": True, "at_beat": st.get("progress")}
 
     def _write_automation(self, params):
         """Draw an automation curve into an arrangement clip's envelope.
