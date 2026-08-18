@@ -254,6 +254,49 @@ def library_stats() -> str:
     return json.dumps(search_mod.library_stats(), indent=2)
 
 
+@mcp.tool()
+def collect_bounce(song: str, section: str = "full pass",
+                   analyze: bool = True, reference: str = None) -> str:
+    """Grab the AudioCapture recording, file it properly, and (optionally)
+    analyze it — no manual Move-Item ever again.
+
+    Moves C:/tmp/ableton_capture.wav into C:/Music Production/Bounces/ as
+    '<song> - <section> - v<N>.wav' with the version number auto-detected
+    (v1, v2, v3... based on what's already there). Then runs analyze_bounce
+    on it, and if `reference` is given (a reference card name), also runs
+    compare_mix. Returns JSON with the new path and the analysis.
+
+    Workflow: toggle AudioCapture off after recording, then just call this.
+    """
+    import re
+    import shutil
+    capture = Path("C:/tmp/ableton_capture.wav")
+    bounces = Path("C:/Music Production/Bounces")
+    if not capture.exists():
+        return ("No capture found at C:/tmp/ableton_capture.wav — is the "
+                "AudioCapture toggle off? (The file is written on toggle-off.)")
+    bounces.mkdir(parents=True, exist_ok=True)
+    version = 1
+    pattern = re.compile(re.escape(song) + r" - " + re.escape(section)
+                         + r" - v(\d+)\.wav$", re.IGNORECASE)
+    for f in bounces.glob("*.wav"):
+        m = pattern.search(f.name)
+        if m:
+            version = max(version, int(m.group(1)) + 1)
+    dest = bounces / ("{0} - {1} - v{2}.wav".format(song, section, version))
+    shutil.move(str(capture), str(dest))
+    out = {"filed_as": str(dest), "version": version}
+    if analyze:
+        ab = _ears_import("analyze_bounce")
+        out["analysis"] = ab.analyze(str(dest))
+    if reference:
+        try:
+            out["comparison"] = json.loads(compare_mix(str(dest), reference))
+        except Exception as exc:
+            out["comparison_error"] = str(exc)
+    return json.dumps(out, indent=2)
+
+
 def main():
     mcp.run(transport="stdio")
 

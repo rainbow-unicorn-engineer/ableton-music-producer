@@ -350,7 +350,9 @@ class AbletonMCP(ControlSurface):
                                  "delete_device", "navigate_preset",
                                  "delete_track",
                                  "set_track_volume", "set_track_panning",
-                                 "set_master_device_parameter"]:
+                                 "set_master_device_parameter",
+                                 "create_arrangement_audio_clip_ex",
+                                 "trim_arrangement_clip"]:
                 # Use a thread-safe approach with a response queue
                 response_queue = queue.Queue()
                 
@@ -481,6 +483,17 @@ class AbletonMCP(ControlSurface):
                             pi = params.get("parameter_index", None)
                             val = params.get("value", 0.0)
                             result = self._set_master_device_parameter(di, pn, pi, val)
+                        elif command_type == "create_arrangement_audio_clip_ex":
+                            ti = params.get("track_index", 0)
+                            pos = params.get("position", 0.0)
+                            fp = params.get("file_path", "")
+                            props = params.get("properties", {})
+                            result = self._create_arrangement_audio_clip_ex(ti, pos, fp, props)
+                        elif command_type == "trim_arrangement_clip":
+                            ti = params.get("track_index", 0)
+                            ci = params.get("clip_index", 0)
+                            eb = params.get("end_beats", 0.0)
+                            result = self._trim_arrangement_clip(ti, ci, eb)
                         elif command_type == "set_device_enabled":
                             ti = params.get("track_index", 0)
                             di = params.get("device_index", 0)
@@ -576,6 +589,10 @@ class AbletonMCP(ControlSurface):
                 ti = params.get("track_index", 0)
                 di = params.get("device_index", 0)
                 response["result"] = self._get_drum_pad_info(ti, di)
+            elif command_type == "get_arrangement_clip_details":
+                ti = params.get("track_index", 0)
+                ci = params.get("clip_index", 0)
+                response["result"] = self._get_arrangement_clip_details(ti, ci)
             elif command_type == "get_clip_notes":
                 ti = params.get("track_index", 0)
                 ci = params.get("clip_index", 0)
@@ -1320,6 +1337,8 @@ class AbletonMCP(ControlSurface):
                     "is_midi": track.has_midi_input,
                     "is_audio": track.has_audio_input,
                     "is_group_track": is_group,
+                    "muted": bool(getattr(track, "mute", False)),
+                    "soloed": bool(getattr(track, "solo", False)),
                     "arrangement_clips": clips,
                     "clip_count": len(clips),
                 })
@@ -1517,6 +1536,130 @@ class AbletonMCP(ControlSurface):
             return {"note_count": len(notes)}
         except Exception as e:
             self.log_message("Error adding notes to arrangement clip: " + str(e))
+            raise
+
+    def _get_arrangement_clip_details(self, track_index, clip_index):
+        """Read an arrangement clip's full pointer: file, offsets, warp,
+        gain — everything needed to clone it elsewhere."""
+        try:
+            track, clip = self._resolve_arrangement_clip(track_index, clip_index)
+            details = {
+                "name": clip.name,
+                "is_audio": clip.is_audio_clip,
+                "is_midi": clip.is_midi_clip,
+                "start_time": clip.start_time,
+                "end_time": clip.end_time,
+                "looping": clip.looping,
+                "loop_start": clip.loop_start,
+                "loop_end": clip.loop_end,
+                "muted": clip.muted,
+            }
+            try:
+                details["start_marker"] = clip.start_marker
+                details["end_marker"] = clip.end_marker
+            except Exception:
+                pass
+            if clip.is_audio_clip:
+                details["file_path"] = clip.file_path
+                details["warping"] = clip.warping
+                try:
+                    details["warp_mode"] = int(clip.warp_mode)
+                except Exception:
+                    pass
+                details["gain"] = clip.gain
+                details["pitch_coarse"] = clip.pitch_coarse
+                details["pitch_fine"] = clip.pitch_fine
+            return details
+        except Exception as e:
+            self.log_message("Error getting arrangement clip details: " + str(e))
+            raise
+
+    def _create_arrangement_audio_clip_ex(self, track_index, position, file_path, props):
+        """Create an audio clip in the arrangement and apply cloned
+        properties (warp, loop offsets, gain, pitch) — the write half of
+        a true audio-clip copy."""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+            self._validate_not_return_or_master(track_index)
+            track = self._song.tracks[track_index]
+            track.create_audio_clip(file_path, position)
+            new_clip = None
+            for clip in track.arrangement_clips:
+                if abs(clip.start_time - position) < 0.01:
+                    new_clip = clip
+                    break
+            if new_clip is None:
+                raise RuntimeError("Created clip not found at position")
+            props = props or {}
+            # order matters: warping first (changes unit meaning of offsets)
+            if "warping" in props:
+                new_clip.warping = props["warping"]
+            if "warp_mode" in props:
+                try:
+                    new_clip.warp_mode = props["warp_mode"]
+                except Exception:
+                    pass
+            for key in ("looping", "loop_start", "loop_end",
+                        "start_marker", "end_marker",
+                        "gain", "pitch_coarse", "pitch_fine", "muted"):
+                if key in props:
+                    try:
+                        setattr(new_clip, key, props[key])
+                    except Exception as prop_err:
+                        self.log_message("clip prop '{0}' skipped: {1}".format(
+                            key, prop_err))
+            if props.get("name"):
+                new_clip.name = props["name"]
+            return self._get_arrangement_clip_info(new_clip)
+        except Exception as e:
+            self.log_message("Error creating audio clip ex: " + str(e))
+            raise
+
+    def _trim_arrangement_clip(self, track_index, clip_index, end_beats):
+        """Shorten an arrangement clip so it ends at end_beats (absolute).
+
+        Uses the carve trick: creating a clip over an existing one truncates
+        it; we create a throwaway overlay at the cut point, then delete it.
+        For audio clips the overlay spans the rest of the file, so this is
+        only SAFE when no other clips sit after the cut point — we check,
+        and refuse rather than damage neighbours.
+        """
+        try:
+            track, clip = self._resolve_arrangement_clip(track_index, clip_index)
+            old_end = clip.end_time
+            start = clip.start_time
+            if end_beats >= old_end:
+                return {"trimmed": False, "reason": "already shorter",
+                        "end_time": old_end}
+            if end_beats <= start:
+                raise ValueError("Cut point is before the clip starts")
+            if clip.is_midi_clip:
+                # exact-length overlay: always safe
+                track.create_midi_clip(end_beats, old_end - end_beats)
+            else:
+                # full-file overlay would carve everything after the cut —
+                # refuse if any other clip lives beyond it on this track
+                for other in track.arrangement_clips:
+                    if other == clip:
+                        continue
+                    if other.end_time > end_beats:
+                        raise ValueError(
+                            "Trim would damage clip '{0}' at {1} — trim this "
+                            "one by hand (drag its right edge)".format(
+                                other.name, other.start_time))
+                track.create_audio_clip(clip.file_path, end_beats)
+            overlay = None
+            for c in track.arrangement_clips:
+                if abs(c.start_time - end_beats) < 0.001:
+                    overlay = c
+                    break
+            if overlay is not None:
+                track.delete_clip(overlay)
+            return {"trimmed": True, "start_time": start,
+                    "end_time": end_beats}
+        except Exception as e:
+            self.log_message("Error trimming arrangement clip: " + str(e))
             raise
 
     def _get_clip_notes(self, track_index, clip_index, arrangement=False):

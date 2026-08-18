@@ -201,7 +201,20 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
 # Create the MCP server with lifespan support
 mcp = FastMCP(
     "AbletonMCP",
-    instructions="Ableton Live integration through the Model Context Protocol",
+    instructions=(
+        "Ableton Live integration through the Model Context Protocol. "
+        "HOUSE RULES for this studio: (1) The user's sets come from the "
+        "XLNT Starter template with DESIGNATED tracks for every job — "
+        "group buses (DRUMS, Percussion, MID SYNTHS, SUB, INTRO SYNTHS, "
+        "FX, VOX, ECHO FX BUS) and purpose-named tracks inside them "
+        "(e.g. 'SUB (MIDI)', 'SYNTH 1', 'Piano', 'RISE 1-3', 'DOWN 1-3', "
+        "'IMPACT 1-2', 'TRIGGER'). ALWAYS look for the designated track "
+        "(get_track_info / get_arrangement_info) and write clips/devices "
+        "there. NEVER create a new track unless the user explicitly asks. "
+        "(2) Read notes with get_clip_notes before recreating parts — "
+        "copy, don't reinvent. (3) State changes you make so the user "
+        "can undo them."
+    ),
     lifespan=server_lifespan
 )
 
@@ -2277,6 +2290,200 @@ def set_master_device_parameter(
                 f"(normalized {result.get('normalized')})")
     except Exception as e:
         return f"Error setting master device parameter: {str(e)}"
+
+
+@mcp.tool()
+def get_arrangement_clip_details(
+    ctx: Context,
+    track_index: int,
+    clip_index: int = 1,
+) -> str:
+    """Read an arrangement clip's full recipe — file path, start/end
+    offsets into the file, warp settings, gain, pitch. The read half of
+    audio-clip copying (see copy_arrangement_clip).
+
+    Parameters:
+    - track_index: Track number (1-based).
+    - clip_index: Arrangement clip position (1-based).
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_arrangement_clip_details", {
+            "track_index": _to_zero_based(track_index, "track_index"),
+            "clip_index": _to_zero_based(clip_index, "clip_index"),
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error getting clip details: {str(e)}"
+
+
+@mcp.tool()
+def copy_arrangement_clip(
+    ctx: Context,
+    source_track: int,
+    source_clip: int,
+    destination_bar: int,
+    destination_track: int = 0,
+) -> str:
+    """TRUE COPY of an arrangement AUDIO clip — including which slice of
+    the file it plays, warping, gain, and pitch. (For MIDI clips use
+    get_clip_notes + create + add_notes instead.)
+
+    Parameters:
+    - source_track: Track number of the clip to copy (1-based).
+    - source_clip: Arrangement clip position (1-based).
+    - destination_bar: Bar to place the copy at (1-based).
+    - destination_track: Target track (1-based; 0 = same as source).
+    """
+    try:
+        ableton = get_ableton_connection()
+        details = ableton.send_command("get_arrangement_clip_details", {
+            "track_index": _to_zero_based(source_track, "source_track"),
+            "clip_index": _to_zero_based(source_clip, "source_clip"),
+        })
+        if not details.get("is_audio"):
+            return ("Source is a MIDI clip — use get_clip_notes + "
+                    "create_arrangement_midi_clip + add_notes_to_arrangement_clip.")
+        position = _convert_bar_to_beat(destination_bar)
+        dest = (_to_zero_based(destination_track, "destination_track")
+                if destination_track else _to_zero_based(source_track, "source_track"))
+        props = {k: details[k] for k in ("warping", "warp_mode", "looping",
+                                         "loop_start", "loop_end",
+                                         "start_marker", "end_marker",
+                                         "gain", "pitch_coarse", "pitch_fine",
+                                         "name")
+                 if k in details}
+        result = ableton.send_command("create_arrangement_audio_clip_ex", {
+            "track_index": dest,
+            "position": position,
+            "file_path": details["file_path"],
+            "properties": props,
+        })
+        # auto-trim the copy to the source clip's length
+        src_length = details["end_time"] - details["start_time"]
+        try:
+            new_clips = ableton.send_command("get_arrangement_info", {
+                "track_index": dest})
+        except Exception:
+            new_clips = None
+        try:
+            # find the fresh clip's 1-based index by its start position
+            idx = None
+            clips = (new_clips or {}).get("tracks", [{}])[0].get("arrangement_clips", [])
+            for i, c in enumerate(clips):
+                if abs(c.get("start_time", -1) - position) < 0.01:
+                    idx = i
+                    break
+            if idx is not None:
+                trim = ableton.send_command("trim_arrangement_clip", {
+                    "track_index": dest,
+                    "clip_index": idx,
+                    "end_beats": position + src_length,
+                })
+                result["trim"] = trim
+            else:
+                result["trim"] = "clip index not found — trim by hand if needed"
+        except Exception as trim_err:
+            result["trim"] = f"auto-trim skipped: {trim_err}"
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error copying arrangement clip: {str(e)}"
+
+
+@mcp.tool()
+def trim_arrangement_clip(
+    ctx: Context,
+    track_index: int,
+    clip_index: int,
+    end_bar: int,
+) -> str:
+    """Shorten an arrangement clip so it ends at a given bar (drag-the-
+    right-edge, programmatically). MIDI clips: always safe. Audio clips:
+    refuses (with an explanation) if the trim would damage other clips
+    later on the same track.
+
+    Parameters:
+    - track_index: Track number (1-based).
+    - clip_index: Arrangement clip position (1-based).
+    - end_bar: Bar the clip should end at (1-based).
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("trim_arrangement_clip", {
+            "track_index": _to_zero_based(track_index, "track_index"),
+            "clip_index": _to_zero_based(clip_index, "clip_index"),
+            "end_beats": _convert_bar_to_beat(end_bar),
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error trimming clip: {str(e)}"
+
+
+@mcp.tool()
+def arrangement_doctor(
+    ctx: Context,
+    start_bar: int = 1,
+    end_bar: int = 0,
+    block_bars: int = 8,
+    standard: str = "drop",
+    align_to_cues: bool = True,
+) -> str:
+    """Diagnose an arrangement the way a producer would — density, missing
+    roles, and repetition. Use this BEFORE reaching for EQ when a track
+    sounds "boring", "plain", "empty" or "not finished".
+
+    Reports per block: how many elements (distinct tracks) are sounding,
+    which roles are present, which roles are MISSING versus a full
+    commercial section, and whether the block is identical to the previous
+    one. Commercial drops run 18-25 elements; sparse blocks are the usual
+    cause of "it sounds thin".
+
+    Parameters:
+    - start_bar / end_bar: bar window (1-based; end_bar 0 = to the end).
+    - block_bars: block size when not aligning to cue points (default 8).
+    - standard: role checklist to compare against — 'drop', 'break',
+      'build', or 'none'.
+    - align_to_cues: use the project's cue points as block boundaries so
+      blocks match real sections instead of a blind 8-bar grid.
+    """
+    try:
+        try:
+            from server.arrangement_doctor import analyze, format_report
+        except ImportError:  # running server.py directly as a script
+            from arrangement_doctor import analyze, format_report
+
+        ableton = get_ableton_connection()
+        info = ableton.send_command("get_arrangement_info", {"track_index": -1})
+        transport = info.get("transport", {})
+        num = transport.get("signature_numerator", 4)
+        denom = transport.get("signature_denominator", 4)
+        beats_per_bar = num * (4.0 / denom)
+
+        boundaries = None
+        if align_to_cues:
+            try:
+                cues = ableton.send_command("get_cue_points").get("cue_points", [])
+                boundaries = sorted({beat_to_bar(c.get("time", 0), num, denom)
+                                     for c in cues})
+            except Exception:
+                boundaries = None
+
+        result = analyze(
+            info.get("tracks", []),
+            beats_per_bar=beats_per_bar,
+            block_bars=block_bars,
+            start_bar=start_bar,
+            end_bar=end_bar or None,
+            standard=(None if standard == "none" else standard),
+            boundaries=boundaries,
+        )
+        report = format_report(result)
+        if boundaries:
+            report += f"\n\n(blocks aligned to cue points: {boundaries})"
+        return report
+    except Exception as e:
+        logger.error(f"Error running arrangement doctor: {str(e)}")
+        return f"Error running arrangement doctor: {str(e)}"
 
 
 def main():
